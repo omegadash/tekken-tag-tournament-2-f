@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <numbers>
 
 extern "C" PPC_FUNC(__imp__sub_823A70F0);
 extern "C" PPC_FUNC(__imp__sub_823A9700);
@@ -13,10 +14,12 @@ extern "C" PPC_FUNC(__imp__sub_823A9D88);
 extern "C" PPC_FUNC(__imp__sub_823AC118);
 extern "C" PPC_FUNC(__imp__sub_824D0D58);
 extern "C" PPC_FUNC(__imp__sub_82545EE0);
+extern "C" PPC_FUNC(__imp__sub_822CDA88);
 extern "C" PPC_FUNC(__imp__sub_822D4B68);
 extern "C" PPC_FUNC(__imp__sub_822E36C0);
 extern "C" PPC_FUNC(__imp__sub_822E3E18);
-extern "C" PPC_FUNC(__imp__sub_822E4350);
+extern "C" PPC_FUNC(__imp__sub_82320AC8);
+extern "C" PPC_FUNC(__imp__sub_82396828);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
 void TekkenForceReadMoveAxes(int& horizontal, int& depth);
 
@@ -39,13 +42,16 @@ constexpr float kHalfDepth = 800.0f;
 constexpr float kAttackDepth = 320.0f;
 constexpr float kBodyContactDistance = 420.0f;
 constexpr float kEnemyStep = 14.0f;
-constexpr float kEnemyStrikeRange = 755.0f;
-constexpr float kEnemyApproachGap = 690.0f;
+constexpr float kEnemyStrikeRange = 700.0f;
+constexpr float kEnemyApproachGap = 645.0f;
 constexpr float kEnemyAlignDepth = 115.0f;
 constexpr unsigned kEnemyStartDelay = 45;
 constexpr unsigned kEnemyWindup = 18;
 constexpr unsigned kEnemyRecovery = 54;
-constexpr uint32_t kLeftKick = 0x1000u; // TU3's decoded fighter input for Xbox A.
+constexpr uint32_t kEnemyStrike = 0x4000u; // TU3's decoded fighter input for Xbox X.
+constexpr uint32_t kAttackButtons = 0xF000u;
+constexpr uint32_t kDirectionButtons = 0x0Fu;
+constexpr uint32_t kWalkLeft = 0x04u, kWalkRight = 0x08u;
 
 struct FixedCamera
 {
@@ -66,9 +72,19 @@ struct EnemyController
     EnemyPhase phase = EnemyPhase::Recover;
     unsigned framesLeft = kEnemyStartDelay;
     bool strikePending = false;
+    bool walking = false;
 };
 
 EnemyController g_enemy;
+
+struct FloorMotion
+{
+    uint32_t fighter = 0;
+    float x = 0.0f, z = 0.0f;
+    bool walking = false;
+};
+
+std::array<FloorMotion, 2> g_motion;
 
 bool Enabled()
 {
@@ -130,6 +146,48 @@ float FloorDepth(float x, float z)
     return -x * g_camera.rightZ + z * g_camera.rightX;
 }
 
+uint32_t WalkDirection(float along)
+{
+    return along < 0.0f ? kWalkLeft : kWalkRight;
+}
+
+bool NativeWalk(uint8_t* base, uint32_t fighter)
+{
+    const uint32_t moveset = GRead32(base, fighter + 136);
+    if (!moveset) return false;
+    constexpr uint32_t kMoveSize = 112;
+    // TU3 resolves common stance 0x8001 through the character's move table.
+    // Its forward and backward walk entries follow that stance in the table.
+    const uint32_t neutral = GRead32(base, moveset + 416) + kMoveSize * GRead16(base, moveset + 138);
+    const uint32_t move = GRead32(base, fighter + 280);
+    return move > neutral && move <= neutral + 10 * kMoveSize;
+}
+
+bool CanWalk(uint8_t* base, uint32_t fighter)
+{
+    const uint8_t posture = GRead8(base, fighter + kPosture);
+    return posture == kStanding || (posture < kFirstDownedPosture && NativeWalk(base, fighter));
+}
+
+float AlongBetween(uint8_t* base, uint32_t from, uint32_t to)
+{
+    return (ReadFloat(base, to) - ReadFloat(base, from)) * g_camera.rightX +
+           (ReadFloat(base, to + 8) - ReadFloat(base, from + 8)) * g_camera.rightZ;
+}
+
+void FaceForStrike(uint8_t* base, uint32_t fighter, uint32_t target)
+{
+    const float x = ReadFloat(base, target) - ReadFloat(base, fighter);
+    const float z = ReadFloat(base, target + 8) - ReadFloat(base, fighter + 8);
+    if (std::abs(x) + std::abs(z) < 1.0f) return;
+    const float radians = std::atan2(x, z);
+    const auto angle = static_cast<uint16_t>(std::lround(radians * (32768.0f / std::numbers::pi_v<float>)));
+    GWrite16(base, fighter + 14, angle);
+    GWrite16(base, fighter + 190, angle);
+    WriteFloat(base, fighter + 32, radians);
+    WriteFloat(base, fighter + 184, radians);
+}
+
 bool EncounterPair(uint8_t* base, uint32_t first, uint32_t second)
 {
     if (!InPractice(base) || !g_camera.ready || !first || !second) return false;
@@ -146,7 +204,25 @@ bool RejectHit(uint8_t* base, uint32_t attacker, uint32_t defender)
     return Defeated(base, attacker) || Defeated(base, defender) || std::abs(depth) > kAttackDepth;
 }
 
-void MoveOnFloor(uint8_t* base, uint32_t fighter, float alongStep, float depthStep)
+void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x, float z)
+{
+    // Keep the logical position and the pose origin used by the hit volumes in sync.
+    PPCContext query = ctx;
+    query.r3.u32 = fighter;
+    __imp__sub_82396828(query, base);
+    const uint32_t pose = query.r3.u32;
+    WriteFloat(base, fighter, x);
+    WriteFloat(base, fighter + 8, z);
+    WriteFloat(base, fighter + 20, x);
+    WriteFloat(base, fighter + 28, z);
+    if (pose)
+    {
+        WriteFloat(base, pose + 48, x);
+        WriteFloat(base, pose + 56, z);
+    }
+}
+
+void MoveOnFloor(PPCContext& ctx, uint8_t* base, uint32_t fighter, float alongStep, float depthStep)
 {
     const float x = ReadFloat(base, fighter);
     const float z = ReadFloat(base, fighter + 8);
@@ -157,27 +233,37 @@ void MoveOnFloor(uint8_t* base, uint32_t fighter, float alongStep, float depthSt
     const float across = std::clamp(FloorDepth(offsetX, offsetZ) + depthStep, -kHalfDepth, kHalfDepth);
     const float nextX = g_camera.centerX + along * rightX - across * rightZ;
     const float nextZ = g_camera.centerZ + along * rightZ + across * rightX;
-    if (std::abs(nextX - x) > 0.001f) WriteFloat(base, fighter, nextX);
-    if (std::abs(nextZ - z) > 0.001f) WriteFloat(base, fighter + 8, nextZ);
+    if (std::abs(nextX - x) > 0.001f || std::abs(nextZ - z) > 0.001f)
+        SetFloorPosition(ctx, base, fighter, nextX, nextZ);
 }
 
-void MoveFighter(uint8_t* base, uint32_t fighter)
+void ReconcileWalk(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorMotion& motion)
+{
+    const bool walking = NativeWalk(base, fighter);
+    const bool walkEnded = motion.walking && GRead8(base, fighter + kPosture) == kStanding;
+    if (motion.fighter == fighter && (walking || walkEnded))
+        SetFloorPosition(ctx, base, fighter, motion.x, motion.z);
+    motion.walking = walking;
+}
+
+void MovePlayer(PPCContext& ctx, uint8_t* base, uint32_t fighter)
 {
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
     const float step = horizontal && depth ? kWalkStep * 0.70710678f : kWalkStep;
-    MoveOnFloor(base, fighter, horizontal * step, depth * step);
+    MoveOnFloor(ctx, base, fighter, horizontal * step, depth * step);
 }
 
-void UpdateEnemy(uint8_t* base, uint32_t enemy, uint32_t player)
+void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player)
 {
+    g_enemy.walking = false;
     if (Defeated(base, enemy) || Defeated(base, player))
     {
         g_enemy.strikePending = false;
         return;
     }
 
-    if (GRead8(base, enemy + kPosture) != kStanding || GRead8(base, player + kPosture) >= kFirstDownedPosture)
+    if (!CanWalk(base, enemy) || GRead8(base, player + kPosture) >= kFirstDownedPosture)
     {
         g_enemy.strikePending = false;
         if (g_enemy.phase == EnemyPhase::Windup) g_enemy = { EnemyPhase::Recover, kEnemyRecovery, false };
@@ -206,7 +292,8 @@ void UpdateEnemy(uint8_t* base, uint32_t enemy, uint32_t player)
     const float forward = along - std::clamp(along, -kEnemyApproachGap, kEnemyApproachGap);
     const float distance = std::hypot(forward, depth);
     const float scale = std::min(1.0f, kEnemyStep / distance);
-    MoveOnFloor(base, enemy, forward * scale, depth * scale);
+    g_enemy.walking = true;
+    MoveOnFloor(ctx, base, enemy, forward * scale, depth * scale);
 }
 
 void PrepareCamera(uint8_t* base, uint32_t camera, uint32_t player, uint32_t dummy)
@@ -266,6 +353,7 @@ PPC_FUNC(sub_823A70F0)
     GWrite32(base, kPracticeFlags, GRead32(base, kPracticeFlags) | kPositionReset);
     g_camera = {};
     g_enemy = {};
+    g_motion = {};
 }
 
 // Disable the two Practice auto-refills. The position reset has its own refill.
@@ -284,7 +372,11 @@ PPC_FUNC(sub_824D0D58)
     if (ctx.lr == 0x8231D1D0u && InPractice(base))
     {
         const uint32_t player = PlayerFighter(base);
-        if (player && ctx.r3.u32 == player + kLife - 4) g_enemy = {};
+        if (player && ctx.r3.u32 == player + kLife - 4)
+        {
+            g_enemy = {};
+            g_motion = {};
+        }
     }
     __imp__sub_824D0D58(ctx, base);
 }
@@ -316,16 +408,38 @@ PPC_FUNC(sub_822E3E18)
     if (!RejectHit(base, ctx.r3.u32, ctx.r4.u32)) __imp__sub_822E3E18(ctx, base);
 }
 
-PPC_FUNC(sub_822E4350)
+// Resolve custom movement before the guest prepares this frame's hit volumes.
+PPC_FUNC(sub_82320AC8)
 {
     if (InPractice(base) && g_camera.ready)
     {
-        const uint32_t enemy = EnemyFighter(base);
-        if (enemy) MoveOnFloor(base, enemy, 0.0f, 0.0f);
         const uint32_t player = PlayerFighter(base);
-        if (enemy && player) UpdateEnemy(base, enemy, player);
+        const uint32_t enemy = EnemyFighter(base);
+        if (player && enemy)
+        {
+            ReconcileWalk(ctx, base, player, g_motion[0]);
+            ReconcileWalk(ctx, base, enemy, g_motion[1]);
+            if (!Defeated(base, player) && CanWalk(base, player)) MovePlayer(ctx, base, player);
+            MoveOnFloor(ctx, base, enemy, 0.0f, 0.0f);
+            UpdateEnemy(ctx, base, enemy, player);
+        }
     }
-    __imp__sub_822E4350(ctx, base);
+    __imp__sub_82320AC8(ctx, base);
+}
+
+PPC_FUNC(sub_822CDA88)
+{
+    __imp__sub_822CDA88(ctx, base);
+    if (!InPractice(base) || !g_camera.ready) return;
+    const uint32_t actors[] = { PlayerFighter(base), EnemyFighter(base) };
+    for (unsigned i = 0; i < g_motion.size(); ++i)
+    {
+        const uint32_t fighter = actors[i];
+        if (!fighter) continue;
+        g_motion[i].fighter = fighter;
+        g_motion[i].x = ReadFloat(base, fighter);
+        g_motion[i].z = ReadFloat(base, fighter + 8);
+    }
 }
 
 // Allow the native KO flags and KO reaction for both fighters. Leave Practice's
@@ -359,17 +473,27 @@ PPC_FUNC(sub_823A9D88)
 }
 
 // Practice supplies held and newly pressed buttons for the CPU fighter here.
-// Keep its standing and get-up logic, and issue one normal kick after windup.
+// Keep its standing and get-up logic, and issue one jab after windup.
 PPC_FUNC(sub_823AC118)
 {
     const uint32_t fighter = ctx.r4.u32, held = ctx.r5.u32, pressed = ctx.r6.u32;
     __imp__sub_823AC118(ctx, base);
-    if (!InPractice(base) || !g_enemy.strikePending || !ctx.r3.u32 || !fighter || !held || !pressed) return;
-    if (fighter != EnemyFighter(base) || Defeated(base, fighter)) return;
-    g_enemy.strikePending = false;
-    if (GRead8(base, fighter + kPosture) != kStanding) return;
-    GWrite32(base, held, GRead32(base, held) | kLeftKick);
-    GWrite32(base, pressed, GRead32(base, pressed) | kLeftKick);
+    if (!InPractice(base) || !g_camera.ready || !ctx.r3.u32 || !fighter || !held || !pressed) return;
+    if (fighter != EnemyFighter(base) || Defeated(base, fighter) || !CanWalk(base, fighter)) return;
+    if (g_enemy.strikePending)
+    {
+        g_enemy.strikePending = false;
+        const uint32_t player = PlayerFighter(base);
+        if (!player || Defeated(base, player)) return;
+        FaceForStrike(base, fighter, player);
+        GWrite32(base, held, GRead32(base, held) | kEnemyStrike);
+        GWrite32(base, pressed, GRead32(base, pressed) | kEnemyStrike);
+    }
+    else if (g_enemy.walking)
+    {
+        // Practice CPU directions are relative to the fighter. This is forward.
+        GWrite32(base, held, (GRead32(base, held) & ~kDirectionButtons) | kWalkRight);
+    }
 }
 
 // Set the pose before the guest publishes its view to the stage and renderer.
@@ -404,6 +528,16 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
         ctx.r3.u32 = 0;
         return;
     }
-    if (lr == 0x82303A1Cu) MoveFighter(base, fighter);
-    ctx.r3.u32 &= ~0x0Fu;
+    ctx.r3.u32 &= ~kDirectionButtons;
+    if (lr != 0x82303A1Cu || !CanWalk(base, fighter)) return;
+    const uint32_t enemy = EnemyFighter(base);
+    if (ctx.r3.u32 & kAttackButtons)
+    {
+        if (enemy) FaceForStrike(base, fighter, enemy);
+        return;
+    }
+    int horizontal, depth;
+    TekkenForceReadMoveAxes(horizontal, depth);
+    if (horizontal || depth)
+        ctx.r3.u32 |= WalkDirection(horizontal ? float(horizontal) : (enemy ? AlongBetween(base, fighter, enemy) : 1.0f));
 }

@@ -61,12 +61,12 @@ top slot for that session. The row opens the game's Practice fighter and stage s
 Select **Solo** for both sides, pick your fighter and opponent, and choose an existing stage.
 
 Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
-across the floor. Diagonals move at the same speed as the four main directions. The camera
-holds a side view while you move within the encounter bounds.
+across the floor. Both fighters use stock walk animations. Diagonals move at the same speed
+as the four main directions. The camera holds a side view within the encounter bounds.
 
-The opponent approaches at floor level, lines up a kick, and pauses to recover. Step across
-the floor during the windup to evade, then line up your counterattack. Use the fighter's
-normal attack buttons up close and at matching floor depth. With Jun, try
+The opponent approaches at floor level, lines up a jab, and pauses to recover. Step across
+the floor during the windup to evade, then line up your counterattack. Attacks turn toward
+the opponent at startup and still need to reach them at a similar floor depth. With Jun, try
 **X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
 equivalents are **Z** and **A + S**. **A** also performs a wake-up kick when your fighter has
 landed after a knockdown. Damage carries across hits for both fighters. Reset the encounter
