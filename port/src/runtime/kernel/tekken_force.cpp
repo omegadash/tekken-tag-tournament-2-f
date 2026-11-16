@@ -13,11 +13,13 @@ extern "C" PPC_FUNC(__imp__sub_823A9778);
 extern "C" PPC_FUNC(__imp__sub_823A9D88);
 extern "C" PPC_FUNC(__imp__sub_823AC118);
 extern "C" PPC_FUNC(__imp__sub_824D0D58);
+extern "C" PPC_FUNC(__imp__sub_824D0D78);
 extern "C" PPC_FUNC(__imp__sub_82545EE0);
 extern "C" PPC_FUNC(__imp__sub_822CDA88);
 extern "C" PPC_FUNC(__imp__sub_822D4B68);
 extern "C" PPC_FUNC(__imp__sub_822E36C0);
 extern "C" PPC_FUNC(__imp__sub_822E3E18);
+extern "C" PPC_FUNC(__imp__sub_8231DA80);
 extern "C" PPC_FUNC(__imp__sub_82320AC8);
 extern "C" PPC_FUNC(__imp__sub_82396828);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
@@ -33,6 +35,11 @@ constexpr uint32_t kCameraManagerOffset = 724;
 constexpr uint32_t kRenderCameraOffset = 384;
 constexpr uint32_t kProjectionOffset = 0xA0;
 constexpr uint32_t kLife = 96; // Fighter's current life in 16.16 fixed point.
+constexpr uint32_t kOpponent = 152;
+constexpr uint32_t kPartner = 172;
+constexpr uint32_t kOnStage = 996;
+constexpr uint32_t kSolo = 1012;
+constexpr uint32_t kOnPoint = 7792;
 constexpr uint32_t kPosture = 875;
 constexpr uint8_t kStanding = 3;
 constexpr uint8_t kFirstDownedPosture = 12;
@@ -75,7 +82,8 @@ struct EnemyController
     bool walking = false;
 };
 
-EnemyController g_enemy;
+std::array<EnemyController, 2> g_enemies;
+bool g_spawnPartner = true;
 
 struct FloorMotion
 {
@@ -84,7 +92,7 @@ struct FloorMotion
     bool walking = false;
 };
 
-std::array<FloorMotion, 2> g_motion;
+std::array<FloorMotion, 3> g_motion;
 
 bool Enabled()
 {
@@ -104,8 +112,8 @@ uint32_t ActiveFighter(uint8_t* base, uint32_t side)
 {
     if (side > 1) return 0;
     const uint32_t fighter = GRead32(base, kFighterTable + side * 4);
-    if (fighter && GRead32(base, fighter + 7792) == 0)
-        return GRead32(base, fighter + 172);
+    if (fighter && GRead32(base, fighter + kOnPoint) == 0)
+        return GRead32(base, fighter + kPartner);
     return fighter;
 }
 
@@ -114,9 +122,45 @@ uint32_t PlayerFighter(uint8_t* base)
     return ActiveFighter(base, GRead32(base, kPracticeSettings + 100));
 }
 
+uint32_t OpponentSide(uint8_t* base)
+{
+    return GRead32(base, kPracticeSettings + 100) ^ 1;
+}
+
 uint32_t EnemyFighter(uint8_t* base)
 {
-    return ActiveFighter(base, GRead32(base, kPracticeSettings + 100) ^ 1);
+    return ActiveFighter(base, OpponentSide(base));
+}
+
+uint32_t EnemyPartner(uint8_t* base)
+{
+    const uint32_t side = OpponentSide(base);
+    if (side > 1) return 0;
+    const uint32_t lead = GRead32(base, kFighterTable + side * 4);
+    // TU3 still allocates a reserve actor for a Solo side.
+    return lead && !GRead32(base, lead + kSolo) ? GRead32(base, lead + kPartner) : 0;
+}
+
+std::array<uint32_t, 2> Enemies(uint8_t* base)
+{
+    const uint32_t second = EnemyPartner(base);
+    if (second) return {GRead32(base, kFighterTable + OpponentSide(base) * 4), second};
+    return {EnemyFighter(base), 0};
+}
+
+bool IsEnemy(uint8_t* base, uint32_t actor)
+{
+    if (!actor) return false;
+    const auto enemies = Enemies(base);
+    return actor == enemies[0] || actor == enemies[1];
+}
+
+void ResetControllers()
+{
+    g_enemies = {};
+    g_enemies[1].framesLeft += 24;
+    g_spawnPartner = true;
+    g_motion = {};
 }
 
 bool Defeated(uint8_t* base, uint32_t fighter)
@@ -192,16 +236,45 @@ bool EncounterPair(uint8_t* base, uint32_t first, uint32_t second)
 {
     if (!InPractice(base) || !g_camera.ready || !first || !second) return false;
     const uint32_t player = PlayerFighter(base);
-    const uint32_t enemy = EnemyFighter(base);
-    return (first == player && second == enemy) || (first == enemy && second == player);
+    return (first == player && IsEnemy(base, second)) || (second == player && IsEnemy(base, first));
 }
 
 bool RejectHit(uint8_t* base, uint32_t attacker, uint32_t defender)
 {
+    if (InPractice(base) && g_camera.ready && attacker != defender &&
+        IsEnemy(base, attacker) && IsEnemy(base, defender)) return true;
     if (!EncounterPair(base, attacker, defender)) return false;
     const float depth = FloorDepth(ReadFloat(base, attacker) - ReadFloat(base, defender),
                                    ReadFloat(base, attacker + 8) - ReadFloat(base, defender + 8));
     return Defeated(base, attacker) || Defeated(base, defender) || std::abs(depth) > kAttackDepth;
+}
+
+uint32_t AttackTarget(uint8_t* base, uint32_t player, int horizontal, int depth)
+{
+    uint32_t target = 0;
+    float bestScore = 0.0f;
+    const float inputLength = std::hypot(float(horizontal), float(depth));
+    for (const uint32_t enemy : Enemies(base))
+    {
+        if (!enemy || Defeated(base, enemy)) continue;
+        const float x = ReadFloat(base, enemy) - ReadFloat(base, player);
+        const float z = ReadFloat(base, enemy + 8) - ReadFloat(base, player + 8);
+        const float across = FloorDepth(x, z);
+        const float distance = std::hypot(x, z);
+        float score = distance + std::max(0.0f, std::abs(across) - kAttackDepth) * 4.0f;
+        if (inputLength > 0.0f && distance > 1.0f)
+        {
+            const float along = x * g_camera.rightX + z * g_camera.rightZ;
+            const float alignment = (along * horizontal + across * depth) / (distance * inputLength);
+            score += (1.0f - alignment) * 650.0f;
+        }
+        if (!target || score < bestScore)
+        {
+            target = enemy;
+            bestScore = score;
+        }
+    }
+    return target;
 }
 
 void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x, float z)
@@ -254,45 +327,45 @@ void MovePlayer(PPCContext& ctx, uint8_t* base, uint32_t fighter)
     MoveOnFloor(ctx, base, fighter, horizontal * step, depth * step);
 }
 
-void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player)
+void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player, EnemyController& controller)
 {
-    g_enemy.walking = false;
+    controller.walking = false;
     if (Defeated(base, enemy) || Defeated(base, player))
     {
-        g_enemy.strikePending = false;
+        controller.strikePending = false;
         return;
     }
 
     if (!CanWalk(base, enemy) || GRead8(base, player + kPosture) >= kFirstDownedPosture)
     {
-        g_enemy.strikePending = false;
-        if (g_enemy.phase == EnemyPhase::Windup) g_enemy = { EnemyPhase::Recover, kEnemyRecovery, false };
+        controller.strikePending = false;
+        if (controller.phase == EnemyPhase::Windup) controller = { EnemyPhase::Recover, kEnemyRecovery, false };
         return;
     }
 
-    if (g_enemy.framesLeft && --g_enemy.framesLeft) return;
-    if (g_enemy.phase == EnemyPhase::Windup)
+    if (controller.framesLeft && --controller.framesLeft) return;
+    if (controller.phase == EnemyPhase::Windup)
     {
         // Commit to this strike. The player can step clear while it starts up.
-        g_enemy = { EnemyPhase::Recover, kEnemyRecovery, true };
+        controller = { EnemyPhase::Recover, kEnemyRecovery, true };
         return;
     }
 
-    g_enemy.phase = EnemyPhase::Approach;
+    controller.phase = EnemyPhase::Approach;
     const float x = ReadFloat(base, player) - ReadFloat(base, enemy);
     const float z = ReadFloat(base, player + 8) - ReadFloat(base, enemy + 8);
     const float along = x * g_camera.rightX + z * g_camera.rightZ;
     const float depth = FloorDepth(x, z);
     if (std::abs(along) <= kEnemyStrikeRange && std::abs(depth) <= kEnemyAlignDepth)
     {
-        g_enemy = { EnemyPhase::Windup, kEnemyWindup, false };
+        controller = { EnemyPhase::Windup, kEnemyWindup, false };
         return;
     }
 
     const float forward = along - std::clamp(along, -kEnemyApproachGap, kEnemyApproachGap);
     const float distance = std::hypot(forward, depth);
     const float scale = std::min(1.0f, kEnemyStep / distance);
-    g_enemy.walking = true;
+    controller.walking = true;
     MoveOnFloor(ctx, base, enemy, forward * scale, depth * scale);
 }
 
@@ -352,8 +425,7 @@ PPC_FUNC(sub_823A70F0)
     GWrite32(base, settings + kBattlePosition, 1);
     GWrite32(base, kPracticeFlags, GRead32(base, kPracticeFlags) | kPositionReset);
     g_camera = {};
-    g_enemy = {};
-    g_motion = {};
+    ResetControllers();
 }
 
 // Disable the two Practice auto-refills. The position reset has its own refill.
@@ -374,11 +446,18 @@ PPC_FUNC(sub_824D0D58)
         const uint32_t player = PlayerFighter(base);
         if (player && ctx.r3.u32 == player + kLife - 4)
         {
-            g_enemy = {};
-            g_motion = {};
+            ResetControllers();
         }
     }
     __imp__sub_824D0D58(ctx, base);
+}
+
+// Solo-versus-Tag can also restore recoverable health independently of Practice.
+PPC_FUNC(sub_824D0D78)
+{
+    const uint32_t fighter = ctx.r3.u32 - (kLife - 4);
+    if (InPractice(base) && (fighter == PlayerFighter(base) || IsEnemy(base, fighter))) return;
+    __imp__sub_824D0D78(ctx, base);
 }
 
 // The duel's body separation also pushes fighters at attack range. In the
@@ -414,14 +493,41 @@ PPC_FUNC(sub_82320AC8)
     if (InPractice(base) && g_camera.ready)
     {
         const uint32_t player = PlayerFighter(base);
-        const uint32_t enemy = EnemyFighter(base);
-        if (player && enemy)
+        const auto enemies = Enemies(base);
+        if (player && enemies[0])
         {
             ReconcileWalk(ctx, base, player, g_motion[0]);
-            ReconcileWalk(ctx, base, enemy, g_motion[1]);
             if (!Defeated(base, player) && CanWalk(base, player)) MovePlayer(ctx, base, player);
-            MoveOnFloor(ctx, base, enemy, 0.0f, 0.0f);
-            UpdateEnemy(ctx, base, enemy, player);
+            if (g_spawnPartner && enemies[1])
+            {
+                const uint32_t partner = enemies[1];
+                // Reuse the tag partner's loaded model and moveset. Activate it
+                // after the native reset has put the roster at its start positions.
+                const uint32_t playerContact = GRead32(base, player + 156);
+                GWrite32(base, partner + kOnPoint, 1);
+                PPCContext spawn = ctx;
+                spawn.r3.u32 = partner;
+                spawn.r4.u32 = player;
+                spawn.r5.u32 = 7; // Practice position reset.
+                spawn.r6.u32 = 0; // Use the standing move.
+                __imp__sub_8231DA80(spawn, base);
+                GWrite32(base, player + 156, playerContact);
+                GWrite32(base, partner + kOnStage, 1);
+                constexpr float along = 920.0f, depth = -620.0f;
+                SetFloorPosition(ctx, base, partner,
+                    g_camera.centerX + along * g_camera.rightX - depth * g_camera.rightZ,
+                    g_camera.centerZ + along * g_camera.rightZ + depth * g_camera.rightX);
+                FaceForStrike(base, partner, player);
+                g_spawnPartner = false;
+            }
+            for (unsigned i = 0; i < enemies.size(); ++i)
+            {
+                const uint32_t enemy = enemies[i];
+                if (!enemy) continue;
+                ReconcileWalk(ctx, base, enemy, g_motion[i + 1]);
+                MoveOnFloor(ctx, base, enemy, 0.0f, 0.0f);
+                UpdateEnemy(ctx, base, enemy, player, g_enemies[i]);
+            }
         }
     }
     __imp__sub_82320AC8(ctx, base);
@@ -431,7 +537,8 @@ PPC_FUNC(sub_822CDA88)
 {
     __imp__sub_822CDA88(ctx, base);
     if (!InPractice(base) || !g_camera.ready) return;
-    const uint32_t actors[] = { PlayerFighter(base), EnemyFighter(base) };
+    const auto enemies = Enemies(base);
+    const uint32_t actors[] = { PlayerFighter(base), enemies[0], enemies[1] };
     for (unsigned i = 0; i < g_motion.size(); ++i)
     {
         const uint32_t fighter = actors[i];
@@ -448,7 +555,7 @@ PPC_FUNC(sub_825B75B0)
 {
     const uint32_t lr = uint32_t(ctx.lr);
     if ((lr == 0x822E8020u || lr == 0x822E2DACu) && InPractice(base) &&
-        (ctx.r31.u32 == EnemyFighter(base) || ctx.r31.u32 == PlayerFighter(base)))
+        (IsEnemy(base, ctx.r31.u32) || ctx.r31.u32 == PlayerFighter(base)))
     {
         ctx.r3.u32 = 0;
         return;
@@ -462,8 +569,8 @@ PPC_FUNC(sub_823A9D88)
 {
     if (ctx.lr == 0x82304958u && InPractice(base))
     {
-        const uint32_t enemy = EnemyFighter(base);
-        if (enemy && ctx.r31.u32 == enemy && Defeated(base, enemy))
+        const uint32_t enemy = ctx.r31.u32;
+        if (IsEnemy(base, enemy) && Defeated(base, enemy))
         {
             ctx.r3.u64 = 13;
             return;
@@ -479,17 +586,19 @@ PPC_FUNC(sub_823AC118)
     const uint32_t fighter = ctx.r4.u32, held = ctx.r5.u32, pressed = ctx.r6.u32;
     __imp__sub_823AC118(ctx, base);
     if (!InPractice(base) || !g_camera.ready || !ctx.r3.u32 || !fighter || !held || !pressed) return;
-    if (fighter != EnemyFighter(base) || Defeated(base, fighter) || !CanWalk(base, fighter)) return;
-    if (g_enemy.strikePending)
+    const auto enemies = Enemies(base);
+    if ((fighter != enemies[0] && fighter != enemies[1]) || Defeated(base, fighter) || !CanWalk(base, fighter)) return;
+    auto& enemy = g_enemies[fighter == enemies[0] ? 0 : 1];
+    if (enemy.strikePending)
     {
-        g_enemy.strikePending = false;
+        enemy.strikePending = false;
         const uint32_t player = PlayerFighter(base);
         if (!player || Defeated(base, player)) return;
         FaceForStrike(base, fighter, player);
         GWrite32(base, held, GRead32(base, held) | kEnemyStrike);
         GWrite32(base, pressed, GRead32(base, pressed) | kEnemyStrike);
     }
-    else if (g_enemy.walking)
+    else if (enemy.walking)
     {
         // Practice CPU directions are relative to the fighter. This is forward.
         GWrite32(base, held, (GRead32(base, held) & ~kDirectionButtons) | kWalkRight);
@@ -530,14 +639,23 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
     }
     ctx.r3.u32 &= ~kDirectionButtons;
     if (lr != 0x82303A1Cu || !CanWalk(base, fighter)) return;
-    const uint32_t enemy = EnemyFighter(base);
-    if (ctx.r3.u32 & kAttackButtons)
-    {
-        if (enemy) FaceForStrike(base, fighter, enemy);
-        return;
-    }
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
-    if (horizontal || depth)
-        ctx.r3.u32 |= WalkDirection(horizontal ? float(horizontal) : (enemy ? AlongBetween(base, fighter, enemy) : 1.0f));
+    if (ctx.r3.u32 & kAttackButtons)
+    {
+        const uint32_t enemy = AttackTarget(base, fighter, horizontal, depth);
+        if (enemy)
+        {
+            // Native attack movement also reads the fighter's opponent link.
+            if (EnemyPartner(base)) GWrite32(base, fighter + kOpponent, enemy);
+            FaceForStrike(base, fighter, enemy);
+        }
+        return;
+    }
+    if (horizontal) ctx.r3.u32 |= WalkDirection(float(horizontal));
+    else if (depth)
+    {
+        const uint32_t enemy = AttackTarget(base, fighter, 0, 0);
+        ctx.r3.u32 |= WalkDirection(enemy ? AlongBetween(base, fighter, enemy) : 1.0f);
+    }
 }

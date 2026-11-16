@@ -58,21 +58,23 @@ instances, no Steam).
 
 Add `--tekken-force` before the image path to put **Tekken Force Test** in the main menu's
 top slot for that session. The row opens the game's Practice fighter and stage selection.
-Select **Solo** for both sides, pick your fighter and opponent, and choose an existing stage.
+Select **Solo** for the player and **Tag** for the CPU, pick the three fighters, and choose an
+existing stage. Both opponents enter the encounter together. Select **Solo** for the CPU to
+play against one opponent.
 
 Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
-across the floor. Both fighters use stock walk animations. Diagonals move at the same speed
+across the floor. Fighters use stock walk animations. Diagonals move at the same speed
 as the four main directions. The camera holds a side view within the encounter bounds.
 
-The opponent approaches at floor level, lines up a jab, and pauses to recover. Step across
-the floor during the windup to evade, then line up your counterattack. Attacks turn toward
-the opponent at startup and still need to reach them at a similar floor depth. With Jun, try
+Each opponent approaches, lines up a jab, and pauses to recover on its own. Step across the floor
+during the windup to evade. Attacks favor nearby opponents at a similar floor depth. Hold a
+direction as you press attack to favor an opponent in that direction. With Jun, try
 **X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
 equivalents are **Z** and **A + S**. **A** also performs a wake-up kick when your fighter has
-landed after a knockdown. Damage carries across hits for both fighters. Reset the encounter
-after either fighter is defeated.
+landed after a knockdown. Damage carries across hits for each fighter. The stock Practice HUD
+shows the lead opponent's health bar. Reset the encounter to restore all fighters.
 
 The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
-Hold **Back/View** and tap **A** on an Xbox controller to reset both fighters. With the stock
+Hold **Back/View** and tap **A** on an Xbox controller to reset all fighters. With the stock
 keyboard bindings, hold **Backspace** and tap the letter **A**. The game shows **Back + A Position**
 at the lower left when reset is available. Launch without `--tekken-force` for the regular main menu.
