@@ -395,8 +395,24 @@ void AddOnlineNetcode(Doc& d);
 void AddDisplayImage(Doc& d);
 void AddGraphicsPage(Doc& d);
 
+void AddTekkenForceEntry(Doc& d)
+{
+    // Use the top slot in the opt-in build session. The stock Offline Mode menu still works.
+    Node& row = d.Find("MenuItemMode001");
+    d.Set(row, "text", "TEKKEN FORCE TEST");
+    d.Set(row, "textid", nullptr);
+    d.Event(row, "OnEnter").text = d.Event(d.Find("MenuItemMode002-07"), "OnEnter").text;
+    d.Event(row, "OnFocus").text = d.Event(d.Find("MenuItemMode002"), "OnFocus").text;
+
+    Node& help = d.Find("StaticMode001");
+    d.Set(help, "text", "Select a solo fighter and a stage for the test encounter.");
+    d.Set(help, "textid", nullptr);
+}
+
 void Edit(Doc& d, const PcLists& lists, std::string* note)
 {
+    if (lists.tekkenForce) AddTekkenForceEntry(d);
+
     // ---- Options -> Display Settings: DISPLAY MODE + RESOLUTION before DEFAULT. Rows are clones
     // of 3D DEPTH, whose OnTrigger passes the value cursor as an int:
     //   if (lib::DisplaySettingIsMonitor3DCapable()) {

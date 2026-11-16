@@ -631,6 +631,13 @@ int main(int argc, char** argv)
         extern int GpuPrebuildShaders(const std::vector<std::filesystem::path>& files, unsigned threads);
         return GpuPrebuildShaders({ game / "data002.bin", game / "data003.bin", image }, threads);
     }
+    // The prototype uses the native offline Practice loader and its reset controls.
+    if (argc > 1 && std::strcmp(argv[1], "--tekken-force") == 0)
+    {
+        _putenv_s("TTT2_TEKKEN_FORCE", "1");
+        --argc;
+        ++argv;
+    }
     const std::string installedImage = InstalledLayout(argc);
     std::setvbuf(stderr, nullptr, _IONBF, 0);   // unbuffered: trace survives a hard crash (StartLogWriter: buffered, its writer flushes)
     StartLogWriter();

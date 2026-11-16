@@ -53,3 +53,14 @@ port\build-o1\tekken_recomp.exe "<install folder>\game\tekken.img"
 The development exe is a console program and logs to stderr; redirect it to a file
 (`... > run.txt 2>&1`) for long runs. `TTT2_NET=loopback` keeps online play on this PC (two
 instances, no Steam).
+
+### Tekken Force test encounter
+
+Add `--tekken-force` before the image path to put **Tekken Force Test** in the main menu's
+top slot for that session. The row opens the game's Practice fighter and stage selection.
+Select **Solo** for one playable fighter, pick a practice dummy, and choose an existing stage.
+
+The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
+Hold **Back/View** and tap **A** on an Xbox controller to reset both fighters. With the stock
+keyboard bindings, hold **Backspace** and tap the letter **A**. The game shows **Back + A Position**
+at the lower left when reset is available. Launch without `--tekken-force` for the regular main menu.
