@@ -58,11 +58,16 @@ instances, no Steam).
 
 Add `--tekken-force` before the image path to put **Tekken Force Test** in the main menu's
 top slot for that session. The row opens the game's Practice fighter and stage selection.
-Select **Solo** for one playable fighter, pick a practice dummy, and choose an existing stage.
+Select **Solo** for both sides, pick your fighter and a stationary opponent, and choose an existing stage.
 
 Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
 across the floor. Diagonals move at the same speed as the four main directions. The camera
 holds a side view while you move within the encounter bounds.
+
+Use the fighter's normal attack buttons up close and at matching floor depth. With Jun, try
+**X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
+equivalents are **Z** and **A + S**. Damage carries across hits, and the opponent stays down
+at zero health until you reset the encounter.
 
 The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
 Hold **Back/View** and tap **A** on an Xbox controller to reset both fighters. With the stock
