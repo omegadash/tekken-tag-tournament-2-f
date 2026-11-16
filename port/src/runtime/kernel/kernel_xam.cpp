@@ -1229,6 +1229,22 @@ void HostPulseStart() { g_startPulseUntilMs = NowMs() + 150; }
 // ONLINE MODE cursor off a row that needs a server).
 void HostPulseDown() { g_downPulseUntilMs = NowMs() + 80; }
 
+void TekkenForceReadMoveAxes(int& horizontal, int& depth)
+{
+    horizontal = depth = 0;
+    if (!g_pads[0].connected.load()) return;
+    std::lock_guard lock(g_pads[0].m);
+    const XINPUT_GAMEPAD& pad = g_pads[0].state.Gamepad;
+    if (pad.wButtons & XINPUT_GAMEPAD_BACK) return;
+    constexpr int deadzone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+    const bool left = (pad.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) || pad.sThumbLX < -deadzone;
+    const bool right = (pad.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) || pad.sThumbLX > deadzone;
+    const bool up = (pad.wButtons & XINPUT_GAMEPAD_DPAD_UP) || pad.sThumbLY > deadzone;
+    const bool down = (pad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) || pad.sThumbLY < -deadzone;
+    horizontal = right - left;
+    depth = down - up;
+}
+
 PPC_FUNC(__imp__XamInputGetCapabilities)
 {
     KTrace("XamInputGetCapabilities");

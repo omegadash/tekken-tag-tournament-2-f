@@ -60,6 +60,10 @@ Add `--tekken-force` before the image path to put **Tekken Force Test** in the m
 top slot for that session. The row opens the game's Practice fighter and stage selection.
 Select **Solo** for one playable fighter, pick a practice dummy, and choose an existing stage.
 
+Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
+across the floor. Diagonals move at the same speed as the four main directions. The camera
+holds a side view while you move within the encounter bounds.
+
 The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
 Hold **Back/View** and tap **A** on an Xbox controller to reset both fighters. With the stock
 keyboard bindings, hold **Backspace** and tap the letter **A**. The game shows **Back + A Position**

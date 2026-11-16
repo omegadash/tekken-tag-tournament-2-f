@@ -4144,11 +4144,14 @@ bool Replay(PPCContext& ctx, uint32_t key)
     return false;
 }
 
+void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base);
+
 PPC_FUNC(sub_822745B0)
 {
     const uint32_t slot = ctx.r4.u32;
     if (Replay(ctx, slot)) return;
     __imp__sub_822745B0(ctx, base);
+    TekkenForceFighterInput(ctx, base);
     if (g_recording) g_recording->calls.push_back({ slot, ctx.r3.u32 });
 }
 
