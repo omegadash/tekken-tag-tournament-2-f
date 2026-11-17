@@ -63,16 +63,34 @@ The installed TU3 palette table provides two Combot color schemes, which repeat 
 
 Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
 across the floor. Fighters use stock walk animations. Diagonals move at the same speed
-as the four main directions. The camera holds a side view within the encounter bounds.
+as the four main directions. The whole stage floor is available and the side camera follows
+the player across it.
 
-Each opponent approaches, lines up a jab, and pauses to recover on its own. Step across the floor
-during the windup to evade. Attacks favor nearby opponents at a similar floor depth. Hold a
+Enemies enter from different off-screen positions using Combot's native run animation, then
+focus on the player. One enemy at a time approaches to attack; the others wait around the
+player. Attack turns rotate after the strike and recovery, or pass on if the attacker is
+interrupted or defeated. Step across the floor during the windup to evade.
+Player attacks favor nearby opponents at a similar floor depth. Hold a
 direction as you press attack to favor an opponent in that direction. With Jun, try
 **X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
 equivalents are **Z** and **A + S**. **A** also performs a wake-up kick when your fighter has
 landed after a knockdown. The player's life bar is at the top. Each Combot has its own smaller
-bar at the bottom. An enemy's empty bar clears when it leaves the floor after a knockout.
+native Tekken-style bar at the bottom, using the same frame and gradient artwork as the player.
+The green CPU label is hidden. An enemy's empty bar clears when it leaves the floor after a knockout.
 Reset the encounter to restore all fighters and their life bars.
+
+The mode creates **tekken-force.ini beside the executable** on first use:
+
+~~~ini
+[Camera]
+PullbackPercent=50
+~~~
+
+This adds 50% to the previous camera's eye-to-target distance. Use 0 for that distance,
+100 for twice the distance, or any percentage from 0 through 200. Invalid values use 50;
+numeric values outside the range are clamped. Edit the file and reset the encounter to
+apply it without rebuilding. The camera follows the player at every setting. A development
+launch can select a different file with TTT2_TF_CONFIG. Regular TTT2 does not read this config.
 
 The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
 Hold **Back/View** and tap **A** on an Xbox controller to reset all fighters. With the stock
