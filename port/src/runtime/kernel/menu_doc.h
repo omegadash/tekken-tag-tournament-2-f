@@ -13,6 +13,7 @@ struct PcLists
     std::vector<std::string> modes;          // DISPLAY MODE values, index = display_settings::Mode
     std::vector<std::string> resolutions;    // RESOLUTION values, index = resolution index
     bool serverRow = false;                  // ONLINE MODE menu: the SERVER row and the server list (server_ui.cpp)
+    bool tekkenForce = false;                // Development shortcut to the offline Practice loader
 };
 
 // The edited document, or an empty string when `doc` is not the Options / main-menu document (or,

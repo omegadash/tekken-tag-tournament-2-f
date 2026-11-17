@@ -1398,6 +1398,7 @@ menu_doc::PcLists PcLists()
     for (const display_settings::Resolution& r : display_settings::Resolutions())
         lists.resolutions.push_back(std::to_string(r.width) + "x" + std::to_string(r.height));
     lists.serverRow = server_ui::Enabled();
+    lists.tekkenForce = EnvFlag("TTT2_TEKKEN_FORCE");
     return lists;
 }
 
