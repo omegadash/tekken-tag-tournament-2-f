@@ -74,6 +74,7 @@ extern "C" PPC_FUNC(__imp__sub_827142C0);
 extern "C" PPC_FUNC(__imp__sub_8249F158);
 extern "C" PPC_FUNC(__imp__sub_823D4D38);
 extern "C" PPC_FUNC(__imp__sub_822A8160);
+extern "C" PPC_FUNC(__imp__sub_82314EA0);
 void TekkenForceBlankScreen(bool on);
 void TekkenForcePublishOverlay(uint8_t* base);
 
@@ -88,7 +89,7 @@ constexpr uint32_t kCombotFighter = 98, kCombotAlternate = 99, kPracticeDummyFig
 constexpr uint32_t kCombotIdle = 1438;     // Cb_sKAM00_
 constexpr uint32_t kCombotApproach = 1439; // sWALK_00F
 constexpr uint32_t kCombotWalkMove = 1444, kCombotWalkLoop = 1445;
-constexpr uint32_t kCombotRun = 1446, kCombotRunLoop = 1447;
+constexpr uint32_t kCombotRun = 140, kCombotRunLast = 143; // sRUN__00F through sRUN__03F
 constexpr uint32_t kCombotJab = 1503;      // Kz_lp00 from Combot's native move table
 constexpr uint32_t kCombotFall = 41;       // Fall_sKAM
 constexpr uint32_t kCombotFaceUp = 164, kCombotFaceDown = 176;
@@ -151,6 +152,7 @@ struct EnemyController
     bool walking = false;
     unsigned defeatedFrames = 0;
     bool entering = true;
+    uint32_t entryLife = 0;
 };
 
 constexpr unsigned kMaxEnemies = 4;
@@ -178,6 +180,7 @@ struct FloorMotion
 };
 
 std::array<FloorMotion, kMaxEnemies + 1> g_motion;
+std::array<FloorMotion, kMaxEnemies> g_entryMotion;
 
 bool Enabled()
 {
@@ -288,6 +291,7 @@ void ResetControllers(uint8_t* base)
     g_spawnPartner = true;
     g_fullRoster = false;
     g_motion = {};
+    g_entryMotion = {};
 }
 
 bool Defeated(uint8_t* base, uint32_t fighter)
@@ -332,11 +336,12 @@ bool NativeWalk(uint8_t* base, uint32_t fighter)
     const uint32_t table = GRead32(base, moveset + 416);
     const uint32_t neutral = table + kMoveSize * GRead16(base, moveset + 138);
     const uint32_t move = GRead32(base, fighter + 280);
+    if (LoadedCombot(base, fighter) && move >= table + kCombotRun * kMoveSize &&
+        move <= table + kCombotRunLast * kMoveSize) return true;
     if (fighter == kPracticeExtra)
     {
         return move == table + kCombotApproach * kMoveSize ||
-               move == table + kCombotWalkMove * kMoveSize || move == table + kCombotWalkLoop * kMoveSize ||
-               move == table + kCombotRun * kMoveSize || move == table + kCombotRunLoop * kMoveSize;
+               move == table + kCombotWalkMove * kMoveSize || move == table + kCombotWalkLoop * kMoveSize;
     }
     return move > neutral && move <= neutral + 10 * kMoveSize;
 }
@@ -543,6 +548,8 @@ void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player
                  EnemyController& controller, unsigned index)
 {
     controller.walking = false;
+    if (!controller.entryLife) controller.entryLife = GRead32(base, enemy + kLife);
+    if (GRead32(base, enemy + kLife) < controller.entryLife) controller.entering = false;
     const bool defeated = Defeated(base, enemy);
     if (g_fullRoster && defeated && GRead32(base, enemy + kOnStage))
     {
@@ -995,9 +1002,18 @@ PPC_FUNC(sub_82320AC8)
             {
                 const uint32_t enemy = enemies[i];
                 if (!enemy) continue;
+                if (g_entryMotion[i].fighter == enemy && g_enemies[i].entering &&
+                    GRead32(base, enemy + kLife) == g_enemies[i].entryLife)
+                {
+                    // Practice can also reposition the CPU between battle ticks.
+                    SetFloorPosition(ctx, base, enemy, g_entryMotion[i].x, g_entryMotion[i].z);
+                }
                 ReconcileWalk(ctx, base, enemy, g_motion[i + 1]);
                 MoveOnFloor(ctx, base, enemy, 0.0f, 0.0f);
                 UpdateEnemy(ctx, base, enemy, player, g_enemies[i], i);
+                g_entryMotion[i] = {};
+                if (g_enemies[i].entering)
+                    g_entryMotion[i] = {enemy, ReadFloat(base, enemy), ReadFloat(base, enemy + 8), true};
             }
         }
     }
@@ -1018,6 +1034,13 @@ PPC_FUNC(sub_822CDA88)
     {
         const uint32_t fighter = actors[i];
         if (!fighter) continue;
+        if (i && g_entryMotion[i - 1].fighter == fighter && g_entryMotion[i - 1].walking &&
+            GRead32(base, fighter + kLife) == g_enemies[i - 1].entryLife && !Defeated(base, fighter))
+        {
+            // Native run root motion assumes a duel opponent and can snap to it.
+            // Keep the run pose, but let arena movement own the entrance distance.
+            SetFloorPosition(ctx, base, fighter, g_entryMotion[i - 1].x, g_entryMotion[i - 1].z);
+        }
         g_motion[i].fighter = fighter;
         g_motion[i].x = ReadFloat(base, fighter);
         g_motion[i].z = ReadFloat(base, fighter + 8);
@@ -1094,10 +1117,14 @@ PPC_FUNC(sub_823AC118)
         {
             const uint32_t moves = GRead32(base, GRead32(base, fighter + 136) + 416);
             const uint32_t move = GRead32(base, fighter + 280);
-            if (move != moves + kCombotRun * 112 && move != moves + kCombotRunLoop * 112)
+            if (move < moves + kCombotRun * 112 || move > moves + kCombotRunLast * 112)
                 CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotRun);
             return;
         }
+        const uint32_t moves = GRead32(base, GRead32(base, fighter + 136) + 416);
+        const uint32_t move = GRead32(base, fighter + 280);
+        if (move >= moves + kCombotRun * 112 && move <= moves + kCombotRunLast * 112)
+            CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotApproach);
         if (fighter == kPracticeExtra)
         {
             if (!NativeWalk(base, fighter)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotApproach);
@@ -1270,6 +1297,24 @@ PPC_FUNC(sub_822CBD80)
         ctx.r4.u32 = player;
     }
     __imp__sub_822CBD80(ctx, base);
+}
+
+PPC_FUNC(sub_82314EA0)
+{
+    const uint32_t fighter = ctx.r3.u32;
+    __imp__sub_82314EA0(ctx, base);
+    if (!InPractice(base) || !g_camera.ready || !IsEnemy(base, fighter)) return;
+    const uint32_t table = GRead32(base, GRead32(base, fighter + 136) + 416);
+    // Native running can branch into an automatic tackle/chop without an attack input.
+    // Entrance animations must never bypass the arena's exclusive attack turn.
+    const uint32_t move = (ctx.r3.u32 - table) / 112;
+    if (move == 144 || move == 146 || move == 285 || move == 286)
+    {
+        const auto enemies = Enemies(base);
+        const auto slot = std::find(enemies.begin(), enemies.end(), fighter);
+        const bool entering = g_enemies[slot - enemies.begin()].entering;
+        ctx.r3.u32 = table + (entering ? kCombotRun : kCombotIdle) * 112;
+    }
 }
 
 PPC_FUNC(sub_822A8160)
