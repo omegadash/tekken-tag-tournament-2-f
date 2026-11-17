@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 
+void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base);   // tekken_force_select.cpp
 namespace online2v2 {
 namespace {
 
@@ -523,6 +524,7 @@ void Frame(PPCContext& ctx, uint8_t* base)
     PlacesTestFrame(ctx, base);
     PlacesFrame(ctx, base);
     PickFrame(base);
+    ::TekkenForceSelectFrame(ctx, base);
     GoFrame(base);
     rematch::Frame(ctx, base, frame);
     static const bool diag = [] { const char* e = std::getenv("TTT2_2V2_DIAG"); return e && *e == '1'; }();

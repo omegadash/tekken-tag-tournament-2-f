@@ -61,6 +61,7 @@ extern "C" PPC_FUNC(__imp__sub_824D0970);
 extern "C" PPC_FUNC(__imp__sub_825582D8);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
 void TekkenForceReadMoveAxes(int& horizontal, int& depth);
+void TekkenForceBlankScreen(bool on);   // kernel_video.cpp
 
 namespace {
 constexpr uint32_t kBattleState = 0x82EAC03Cu;
@@ -828,6 +829,7 @@ PPC_FUNC(sub_82320AC8)
 {
     if (InPractice(base) && g_camera.ready)
     {
+        TekkenForceBlankScreen(false);   // the select hid itself until the encounter is up
         if (g_spawnPartner) g_fullRoster = FullRosterRequested(base);
         const uint32_t player = PlayerFighter(base);
         const auto enemies = Enemies(base);
