@@ -1,8 +1,12 @@
 #include "kernel_shared.h"
+#include "gpu_render.h"
 #include <algorithm>
+#include <vector>
+#include <atomic>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <numbers>
@@ -61,7 +65,8 @@ extern "C" PPC_FUNC(__imp__sub_824D0970);
 extern "C" PPC_FUNC(__imp__sub_825582D8);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
 void TekkenForceReadMoveAxes(int& horizontal, int& depth);
-void TekkenForceBlankScreen(bool on);   // kernel_video.cpp
+void TekkenForceBlankScreen(bool on);
+void TekkenForcePublishOverlay(uint8_t* base);
 
 namespace {
 constexpr uint32_t kBattleState = 0x82EAC03Cu;
@@ -827,6 +832,7 @@ PPC_FUNC(sub_822E31C8)
 // Resolve custom movement before the guest prepares this frame's hit volumes.
 PPC_FUNC(sub_82320AC8)
 {
+    TekkenForcePublishOverlay(base);
     if (InPractice(base) && g_camera.ready)
     {
         TekkenForceBlankScreen(false);   // the select hid itself until the encounter is up
@@ -1017,4 +1023,51 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
         const uint32_t enemy = AttackTarget(base, fighter, 0, 0);
         ctx.r3.u32 |= WalkDirection(enemy ? AlongBetween(base, fighter, enemy) : 1.0f);
     }
+}
+
+// ---- HUD: one player bar at the top, a compact bar per Combot at the bottom (host overlay, gpu_render.h).
+// The stock gauge is a persistent sprite object whose draw could not be gated per side, so the stock partner and CPU
+// gauges are covered with plates and the four enemy bars are drawn over the finished picture. The bars read each
+// actor's own life (+96, 16.16) and maximum (+108) every frame, in the stable order of Enemies().
+namespace {
+std::atomic<bool> g_blank{ false };
+}
+
+void TekkenForceBlankScreen(bool on)
+{
+    static const bool keep = [] { const char* e = std::getenv("TTT2_TF_NOBLANK"); return e && *e == '1'; }();
+    g_blank.store(on && !keep, std::memory_order_relaxed);
+}
+
+void TekkenForcePublishOverlay(uint8_t* base)
+{
+    if (!Enabled()) return;
+    static bool published = false;
+    std::vector<GpuOverlayRect> rects;
+    if (g_blank.load(std::memory_order_relaxed))
+        rects.push_back({ 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f });
+    else if (InPractice(base) && g_camera.ready)
+    {
+        // Plates over the stock tag partner gauge and the CPU gauge, portrait and tag.
+        constexpr float kPlate[3] = { 0.03f, 0.05f, 0.10f };
+        const float covers[][4] = { { 0.1125f, 0.0686f, 0.327f, 0.030f }, { 0.540f, 0.098f, 0.350f, 0.077f },
+                                    { 0.826f, 0.071f, 0.113f, 0.128f }, { 0.866f, 0.213f, 0.060f, 0.035f } };
+        for (const auto& c : covers) rects.push_back({ c[0], c[1], c[2], c[3], kPlate[0], kPlate[1], kPlate[2] });
+        const auto enemies = Enemies(base);
+        for (unsigned i = 0; i < enemies.size(); ++i)
+        {
+            const uint32_t enemy = enemies[i];
+            if (!enemy || !GRead32(base, enemy + kOnStage)) continue;
+            const float life = float(GRead32(base, enemy + kLife)) / 65536.0f;
+            const float maxLife = std::max(1.0f, float(GRead32(base, enemy + 108)) / 65536.0f);
+            const float fraction = std::clamp(life / maxLife, 0.0f, 1.0f);
+            const float x = 0.07f + 0.23f * float(i), y = 0.945f, w = 0.20f, h = 0.020f;
+            rects.push_back({ x - 0.003f, y - 0.006f, w + 0.006f, h + 0.012f, 0.0f, 0.0f, 0.0f });
+            rects.push_back({ x, y, w, h, 0.28f, 0.06f, 0.06f });
+            if (fraction > 0.0f) rects.push_back({ x, y, w * fraction, h, 0.92f, 0.18f, 0.10f });
+        }
+    }
+    if (rects.empty() && !published) return;
+    published = !rects.empty();
+    GpuSetOverlayRects(rects.data(), unsigned(rects.size()));
 }

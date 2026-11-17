@@ -1053,17 +1053,6 @@ static FrontResolveArgs g_frontArgs, g_earlyArgs;       // CP: the last front re
 static uint32_t g_frontArgsAt = ~0u;                    // markers executed when the last one ran
 static bool g_earlyMismatch = false;                    // this frame's own differed: present at its marker
 
-// Tekken Force Test hides the character select while it fills in the fixed opponents (tekken_force_select.cpp):
-// the frame is presented through an all-black display ramp.
-static std::atomic<bool> g_tekkenForceBlank{ false };
-static std::atomic<int64_t> g_tekkenForceBlankSince{ 0 };
-void TekkenForceBlankScreen(bool on)
-{
-    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (on && !g_tekkenForceBlank.load(std::memory_order_relaxed)) g_tekkenForceBlankSince.store(now, std::memory_order_relaxed);
-    g_tekkenForceBlank.store(on, std::memory_order_relaxed);
-}
-
 static void HwPresentFrame(uint32_t fb)
 {
     const timeline::Scope presentMark{ timeline::CpPresent, fb };
@@ -1081,14 +1070,7 @@ static void HwPresentFrame(uint32_t fb)
         std::memcpy(ramp, GammaRamp(), sizeof(ramp));
         rampVersion = v;
     }
-    static const uint32_t blackRamp[256] = {};
-    bool blank = g_tekkenForceBlank.load(std::memory_order_relaxed);
-    // Never leave the screen black for good (a stuck select): 90 s at most.
-    if (blank && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() -
-                         g_tekkenForceBlankSince.load(std::memory_order_relaxed) > 90000)
-        g_tekkenForceBlank.store(blank = false, std::memory_order_relaxed);
-    if (!fb || !GpuHwPresent(fb, SwizzleSwapsRB(g_frontBufferSwizzle.load()), blank ? blackRamp : ramp,
-                             blank ? ~0u - 1u : rampVersion)) return;
+    if (!fb || !GpuHwPresent(fb, SwizzleSwapsRB(g_frontBufferSwizzle.load()), ramp, rampVersion)) return;
     if (FrameTimeLog())
     {
         static FrameTimer presents{ "present" };

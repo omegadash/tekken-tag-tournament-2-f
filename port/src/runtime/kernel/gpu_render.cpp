@@ -2969,6 +2969,14 @@ void GpuHwCompareResolve(uint32_t destBase, const uint32_t* cpuLinear, uint32_t 
 #endif
 }
 
+std::mutex g_overlayLock;
+std::vector<GpuOverlayRect> g_overlayRects;
+void GpuSetOverlayRects(const GpuOverlayRect* rects, unsigned count)
+{
+    std::lock_guard<std::mutex> lock(g_overlayLock);
+    g_overlayRects.assign(rects, rects + count);
+}
+
 bool GpuHwPresent(uint32_t frontBuffer, bool displaySwapRB, const uint32_t* gammaRamp, uint32_t gammaVersion)
 {
     bool presented = false;

@@ -102,6 +102,8 @@ extern std::atomic<uint32_t> g_cpSyncEpoch;            // kernel_video.cpp: comm
 extern uint32_t g_vsConstWrites, g_psConstWrites;
 extern uint32_t g_vsConstLo, g_vsConstHi, g_psConstLo, g_psConstHi;   // p_diag46: registers written since the last compare       // kernel_video.cpp WriteReg: ALU constant register writes
 
+extern std::mutex g_overlayLock;
+extern std::vector<GpuOverlayRect> g_overlayRects;
 namespace ttt2_hw {
 using Microsoft::WRL::ComPtr;
 
@@ -3082,9 +3084,39 @@ private:
         PostPass(backRtv_.Get(), vp, fpsPs_.Get(), fpsSrv_.Get(), cb);
         context_->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
     }
+    ComPtr<ID3D11PixelShader> solidPs_;
+    // Tekken Force: solid rectangles (GpuSetOverlayRects), fractions of the picture, drawn opaque.
+    void DrawOverlayRects()
+    {
+        std::vector<GpuOverlayRect> rects;
+        {
+            std::lock_guard<std::mutex> lock(g_overlayLock);
+            rects = g_overlayRects;
+        }
+        if (rects.empty()) return;
+        if (!solidPs_)
+            solidPs_ = PresentShader("float4 main(float4 pos : SV_Position) : SV_Target { return float4(srcSize, dstSize); }\n",
+                                     "ttt2 present solid ps");
+        for (const GpuOverlayRect& r : rects)
+        {
+            const float x0 = std::round(pictureArea_.TopLeftX + r.x * pictureArea_.Width);
+            const float y0 = std::round(pictureArea_.TopLeftY + r.y * pictureArea_.Height);
+            const float x1 = std::round(pictureArea_.TopLeftX + (r.x + r.w) * pictureArea_.Width);
+            const float y1 = std::round(pictureArea_.TopLeftY + (r.y + r.h) * pictureArea_.Height);
+            if (x1 <= x0 || y1 <= y0) continue;
+            const D3D11_VIEWPORT vp{ x0, y0, x1 - x0, y1 - y0, 0, 1 };
+            PresentCB cb{};
+            cb.srcW = r.r;
+            cb.srcH = r.g;
+            cb.dstW = r.b;
+            cb.dstH = 1.0f;
+            PostPass(backRtv_.Get(), vp, solidPs_.Get(), nullptr, cb);
+        }
+    }
     void PresentScaled(ID3D11Texture2D* source, ID3D11Texture2D* back, bool swap)
     {
         PresentChain(source, back, swap);
+        DrawOverlayRects();
         DrawFpsCounter();
     }
     void PresentChain(ID3D11Texture2D* source, ID3D11Texture2D* back, bool swap)

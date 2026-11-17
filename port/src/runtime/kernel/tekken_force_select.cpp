@@ -6,7 +6,7 @@
 //     pick is the only thing they see;
 //   * the player's partner and the CPU side's two picks are Combot (distinct costumes), the stage is Tulip Festival;
 //   * the screen is held black from the moment the player has picked until the match is on, so no other select or stage
-//     screen shows (TekkenForceBlankScreen in kernel_video.cpp).
+//     screen shows (TekkenForceBlankScreen: an overlay rectangle).
 // The cursors, the grids and the pick rules are the game's: a side may not take a fighter twice, so the Combot's bit is
 // given back to the side's free list before each repeated pick.
 #include "kernel_shared.h"
@@ -18,7 +18,8 @@
 #include <cstring>
 #include <string>
 
-void TekkenForceBlankScreen(bool on);   // kernel_video.cpp
+void TekkenForceBlankScreen(bool on);          // tekken_force.cpp
+void TekkenForcePublishOverlay(uint8_t* base); // tekken_force.cpp
 
 namespace online2v2 {
 uint32_t SelectCursor(int side);
@@ -107,10 +108,19 @@ void Press(uint16_t buttons)
     g_pressAt = Ms();
 }
 
+// The TAG / SOLO window: move the highlight to TAG (the left choice), then confirm it.
+int g_tagStep = 0;
+void PressTag(uint16_t toward)
+{
+    if (g_tagStep++ % 2 == 0) Press(toward);
+    else Press(kA);
+}
+
 void SetPhase(Phase p)
 {
     g_phase = p;
     g_phaseAt = Ms();
+    g_tagStep = 0;
     if (Diag()) std::fprintf(stderr, "[tf-select] phase %d\n", int(p));
 }
 
@@ -136,6 +146,7 @@ void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base)
 {
     (void)ctx;
     if (!TfOn()) return;
+    TekkenForcePublishOverlay(base);
     const bool selecting = online2v2::Selecting();
     if (selecting != g_wasSelecting)
     {
@@ -165,7 +176,7 @@ void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base)
         const uint32_t cur[16] = { GRead32(base, c + kStagePhase), GRead32(base, c + kStageCursor), GRead32(base, s0 + kState),
                                    GRead32(base, s0 + kCell), GRead32(base, s0 + kPicks), GRead32(base, s0 + kTurn),
                                    GRead32(base, s1 + kState), GRead32(base, s1 + kCell), GRead32(base, s1 + kPicks),
-                                   GRead32(base, s1 + kTurn) };
+                                   GRead32(base, s1 + kTurn), GRead32(base, s0 + 0x8204), GRead32(base, s1 + 0x8204) };
         if (std::memcmp(cur, last, sizeof(cur)) != 0)
         {
             std::memcpy(last, cur, sizeof(cur));
@@ -207,7 +218,7 @@ void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base)
             SetPhase(kUser);
         }
         else if (GRead32(base, s0 + kState) == kPlayStyleWindow && now - g_pressAt > 450)
-            Press(kA);
+            PressTag(kLeft);
         break;
     case kUser:
         // Test hook: TTT2_TF_AUTOUSER=<ms> confirms the player's pick by itself after that long.
@@ -227,7 +238,7 @@ void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base)
         break;
     case kCpuLead:
         if (GRead32(base, s1 + kPicks) >= 1) { SetPhase(kCpuPartner); break; }
-        if (GRead32(base, s1 + kState) == kSideOnePlayStyleWindow && now - g_pressAt > 450) Press(kA);
+        if (GRead32(base, s1 + kState) == kSideOnePlayStyleWindow && now - g_pressAt > 450) PressTag(kRight);
         else if (GRead32(base, s1 + kState) == kSideOnePicking) PickCombot(base, c, s1, kCostumeButtons[1], now);
         break;
     case kCpuPartner:
