@@ -15,13 +15,50 @@ extern "C" PPC_FUNC(__imp__sub_823AC118);
 extern "C" PPC_FUNC(__imp__sub_824D0D58);
 extern "C" PPC_FUNC(__imp__sub_824D0D78);
 extern "C" PPC_FUNC(__imp__sub_82545EE0);
+extern "C" PPC_FUNC(__imp__sub_82294410);
+extern "C" PPC_FUNC(__imp__sub_822CC7C8);
+extern "C" PPC_FUNC(__imp__sub_822CBD80);
+extern "C" PPC_FUNC(__imp__sub_822CD798);
 extern "C" PPC_FUNC(__imp__sub_822CDA88);
 extern "C" PPC_FUNC(__imp__sub_822D4B68);
+extern "C" PPC_FUNC(__imp__sub_822E1ED0);
+extern "C" PPC_FUNC(__imp__sub_822E2060);
+extern "C" PPC_FUNC(__imp__sub_822E2590);
+extern "C" PPC_FUNC(__imp__sub_822E2B40);
+extern "C" PPC_FUNC(__imp__sub_822E31C8);
 extern "C" PPC_FUNC(__imp__sub_822E36C0);
 extern "C" PPC_FUNC(__imp__sub_822E3E18);
+extern "C" PPC_FUNC(__imp__sub_822E4350);
+extern "C" PPC_FUNC(__imp__sub_822E4650);
+extern "C" PPC_FUNC(__imp__sub_822E75F0);
+extern "C" PPC_FUNC(__imp__sub_822E80D0);
+extern "C" PPC_FUNC(__imp__sub_822F74C8);
+extern "C" PPC_FUNC(__imp__sub_822F7F48);
+extern "C" PPC_FUNC(__imp__sub_822F8C18);
+extern "C" PPC_FUNC(__imp__sub_822FA6C8);
+extern "C" PPC_FUNC(__imp__sub_822FA720);
+extern "C" PPC_FUNC(__imp__sub_822FAF50);
+extern "C" PPC_FUNC(__imp__sub_822FB4F8);
+extern "C" PPC_FUNC(__imp__sub_822FB748);
+extern "C" PPC_FUNC(__imp__sub_822FBF98);
+extern "C" PPC_FUNC(__imp__sub_82303840);
+extern "C" PPC_FUNC(__imp__sub_82303BB0);
+extern "C" PPC_FUNC(__imp__sub_823165C8);
+extern "C" PPC_FUNC(__imp__sub_82317BD0);
+extern "C" PPC_FUNC(__imp__sub_82317EB0);
+extern "C" PPC_FUNC(__imp__sub_82318FC0);
 extern "C" PPC_FUNC(__imp__sub_8231DA80);
 extern "C" PPC_FUNC(__imp__sub_82320AC8);
+extern "C" PPC_FUNC(__imp__sub_82320C30);
+extern "C" PPC_FUNC(__imp__sub_82320C88);
+extern "C" PPC_FUNC(__imp__sub_82323CF8);
+extern "C" PPC_FUNC(__imp__sub_82394F48);
 extern "C" PPC_FUNC(__imp__sub_82396828);
+extern "C" PPC_FUNC(__imp__sub_82396AE0);
+extern "C" PPC_FUNC(__imp__sub_82397F60);
+extern "C" PPC_FUNC(__imp__sub_82445A50);
+extern "C" PPC_FUNC(__imp__sub_824D0970);
+extern "C" PPC_FUNC(__imp__sub_825582D8);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
 void TekkenForceReadMoveAxes(int& horizontal, int& depth);
 
@@ -30,16 +67,29 @@ constexpr uint32_t kBattleState = 0x82EAC03Cu;
 constexpr uint32_t kPracticeState = 21;
 constexpr uint32_t kPracticeSettings = 0x82DD5F48u;
 constexpr uint32_t kFighterTable = 0x82E88878u;
+constexpr uint32_t kPracticeExtra = 0x82EA71A0u;
+constexpr uint32_t kFifthFighterSlot = kFighterTable + 4 * sizeof(uint32_t);
+constexpr uint32_t kDummyIdle = 723;     // Pm_sKAM00_
+constexpr uint32_t kDummyRecovery = 768; // Pm_count_kam
+constexpr uint32_t kDummyApproach = 102; // Co_Dummy_04, the dummy's dash clip.
+constexpr uint32_t kDummyJab = 770;      // Pm_count_lp01
+constexpr uint32_t kDummyFall = 734;     // Fall_sKAM
+constexpr uint32_t kDummyFaceUp = 744, kDummyFaceDown = 757;
+constexpr uint32_t kDummyRiseFaceUp = 755, kDummyRiseFaceDown = 760;
 constexpr uint32_t kScene = 0x82E6B05Cu;
+constexpr uint32_t kFighterModels = 0x82E6B540u;
 constexpr uint32_t kCameraManagerOffset = 724;
 constexpr uint32_t kRenderCameraOffset = 384;
 constexpr uint32_t kProjectionOffset = 0xA0;
 constexpr uint32_t kLife = 96; // Fighter's current life in 16.16 fixed point.
 constexpr uint32_t kOpponent = 152;
+constexpr uint32_t kContact = 156;
 constexpr uint32_t kPartner = 172;
 constexpr uint32_t kOnStage = 996;
 constexpr uint32_t kSolo = 1012;
+constexpr uint32_t kUsesCpuInput = 1032;
 constexpr uint32_t kOnPoint = 7792;
+constexpr uint32_t kTeam = 7936;
 constexpr uint32_t kPosture = 875;
 constexpr uint8_t kStanding = 3;
 constexpr uint8_t kFirstDownedPosture = 12;
@@ -58,6 +108,7 @@ constexpr unsigned kEnemyRecovery = 54;
 constexpr uint32_t kEnemyStrike = 0x4000u; // TU3's decoded fighter input for Xbox X.
 constexpr uint32_t kAttackButtons = 0xF000u;
 constexpr uint32_t kDirectionButtons = 0x0Fu;
+constexpr uint32_t kTagButton = 0x0200u;
 constexpr uint32_t kWalkLeft = 0x04u, kWalkRight = 0x08u;
 
 struct FixedCamera
@@ -80,10 +131,17 @@ struct EnemyController
     unsigned framesLeft = kEnemyStartDelay;
     bool strikePending = false;
     bool walking = false;
+    unsigned defeatedFrames = 0;
 };
 
-std::array<EnemyController, 2> g_enemies;
+constexpr unsigned kMaxEnemies = 4;
+std::array<EnemyController, kMaxEnemies> g_enemies;
 bool g_spawnPartner = true;
+bool g_fullRoster = false;
+bool g_runningNativePairs = false;
+uint32_t g_reassignedReserve = 0;
+uint32_t g_reserveInput = 0;
+uint32_t g_reserveTeam = 0;
 
 struct FloorMotion
 {
@@ -92,7 +150,7 @@ struct FloorMotion
     bool walking = false;
 };
 
-std::array<FloorMotion, 3> g_motion;
+std::array<FloorMotion, kMaxEnemies + 1> g_motion;
 
 bool Enabled()
 {
@@ -119,7 +177,9 @@ uint32_t ActiveFighter(uint8_t* base, uint32_t side)
 
 uint32_t PlayerFighter(uint8_t* base)
 {
-    return ActiveFighter(base, GRead32(base, kPracticeSettings + 100));
+    const uint32_t side = GRead32(base, kPracticeSettings + 100);
+    if (g_fullRoster && side < 2) return GRead32(base, kFighterTable + side * 4);
+    return ActiveFighter(base, side);
 }
 
 uint32_t OpponentSide(uint8_t* base)
@@ -141,25 +201,47 @@ uint32_t EnemyPartner(uint8_t* base)
     return lead && !GRead32(base, lead + kSolo) ? GRead32(base, lead + kPartner) : 0;
 }
 
-std::array<uint32_t, 2> Enemies(uint8_t* base)
+uint32_t PlayerLead(uint8_t* base)
+{
+    const uint32_t side = GRead32(base, kPracticeSettings + 100);
+    return side < 2 ? GRead32(base, kFighterTable + side * 4) : 0;
+}
+
+bool FullRosterRequested(uint8_t* base)
+{
+    const uint32_t player = PlayerLead(base);
+    return player && !GRead32(base, player + kSolo) && EnemyPartner(base) &&
+           GRead32(base, kPracticeExtra + 136) && GRead32(base, kPracticeExtra + 3068);
+}
+
+std::array<uint32_t, kMaxEnemies> Enemies(uint8_t* base)
 {
     const uint32_t second = EnemyPartner(base);
-    if (second) return {GRead32(base, kFighterTable + OpponentSide(base) * 4), second};
-    return {EnemyFighter(base), 0};
+    if (!second) return {EnemyFighter(base)};
+    const uint32_t first = GRead32(base, kFighterTable + OpponentSide(base) * 4);
+    if (!g_fullRoster) return {first, second};
+    return {first, second, GRead32(base, PlayerLead(base) + kPartner), kPracticeExtra};
 }
 
 bool IsEnemy(uint8_t* base, uint32_t actor)
 {
     if (!actor) return false;
     const auto enemies = Enemies(base);
-    return actor == enemies[0] || actor == enemies[1];
+    return std::find(enemies.begin(), enemies.end(), actor) != enemies.end();
 }
 
-void ResetControllers()
+void ResetControllers(uint8_t* base)
 {
+    if (g_reassignedReserve)
+    {
+        GWrite32(base, g_reassignedReserve + kTeam, g_reserveTeam);
+        GWrite32(base, g_reassignedReserve + kUsesCpuInput, g_reserveInput);
+        g_reassignedReserve = 0;
+    }
     g_enemies = {};
-    g_enemies[1].framesLeft += 24;
+    for (unsigned i = 1; i < g_enemies.size(); ++i) g_enemies[i].framesLeft += 24 * i;
     g_spawnPartner = true;
+    g_fullRoster = false;
     g_motion = {};
 }
 
@@ -202,14 +284,27 @@ bool NativeWalk(uint8_t* base, uint32_t fighter)
     constexpr uint32_t kMoveSize = 112;
     // TU3 resolves common stance 0x8001 through the character's move table.
     // Its forward and backward walk entries follow that stance in the table.
-    const uint32_t neutral = GRead32(base, moveset + 416) + kMoveSize * GRead16(base, moveset + 138);
+    const uint32_t table = GRead32(base, moveset + 416);
+    const uint32_t neutral = table + kMoveSize * GRead16(base, moveset + 138);
     const uint32_t move = GRead32(base, fighter + 280);
+    if (fighter == kPracticeExtra) return move == table + kDummyApproach * kMoveSize;
     return move > neutral && move <= neutral + 10 * kMoveSize;
+}
+
+bool DummyInMove(uint8_t* base, uint32_t moveId)
+{
+    constexpr uint32_t kMoveSize = 112;
+    const uint32_t table = GRead32(base, GRead32(base, kPracticeExtra + 136) + 416);
+    return GRead32(base, kPracticeExtra + 280) == table + moveId * kMoveSize;
 }
 
 bool CanWalk(uint8_t* base, uint32_t fighter)
 {
     const uint8_t posture = GRead8(base, fighter + kPosture);
+    if (fighter == kPracticeExtra && posture < kFirstDownedPosture)
+    {
+        return NativeWalk(base, fighter) || DummyInMove(base, kDummyIdle) || DummyInMove(base, kDummyRecovery);
+    }
     return posture == kStanding || (posture < kFirstDownedPosture && NativeWalk(base, fighter));
 }
 
@@ -241,9 +336,13 @@ bool EncounterPair(uint8_t* base, uint32_t first, uint32_t second)
 
 bool RejectHit(uint8_t* base, uint32_t attacker, uint32_t defender)
 {
-    if (InPractice(base) && g_camera.ready && attacker != defender &&
-        IsEnemy(base, attacker) && IsEnemy(base, defender)) return true;
+    if (InPractice(base) && g_camera.ready)
+    {
+        if (g_fullRoster && attacker == defender && attacker == PlayerFighter(base)) return true;
+        if (IsEnemy(base, attacker) && IsEnemy(base, defender) && (attacker != defender || g_fullRoster)) return true;
+    }
     if (!EncounterPair(base, attacker, defender)) return false;
+    if (g_runningNativePairs) return true;
     const float depth = FloorDepth(ReadFloat(base, attacker) - ReadFloat(base, defender),
                                    ReadFloat(base, attacker + 8) - ReadFloat(base, defender + 8));
     return Defeated(base, attacker) || Defeated(base, defender) || std::abs(depth) > kAttackDepth;
@@ -295,6 +394,33 @@ void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x,
     }
 }
 
+void ActivateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player, float along, float depth)
+{
+    const uint32_t contact = GRead32(base, player + kContact);
+    GWrite32(base, enemy + kOnPoint, 1);
+    GWrite32(base, enemy + kTeam, OpponentSide(base));
+    GWrite32(base, enemy + kUsesCpuInput, 1);
+    PPCContext spawn = ctx;
+    spawn.r3.u32 = enemy;
+    spawn.r4.u32 = player;
+    spawn.r5.u32 = 7; // Practice position reset.
+    spawn.r6.u32 = 0; // Use the standing move.
+    __imp__sub_8231DA80(spawn, base);
+    GWrite32(base, player + kContact, contact);
+    GWrite32(base, enemy + kOnStage, 1);
+    if (enemy == kPracticeExtra)
+    {
+        GWrite32(base, enemy + 92, 4); // Health record resolves its owner through slot 4.
+        GWrite32(base, enemy + 108, GRead32(base, EnemyFighter(base) + 108));
+        spawn.r3.u32 = enemy + kLife - 4;
+        __imp__sub_824D0D58(spawn, base);
+    }
+    SetFloorPosition(ctx, base, enemy,
+        g_camera.centerX + along * g_camera.rightX - depth * g_camera.rightZ,
+        g_camera.centerZ + along * g_camera.rightZ + depth * g_camera.rightX);
+    FaceForStrike(base, enemy, player);
+}
+
 void MoveOnFloor(PPCContext& ctx, uint8_t* base, uint32_t fighter, float alongStep, float depthStep)
 {
     const float x = ReadFloat(base, fighter);
@@ -330,7 +456,25 @@ void MovePlayer(PPCContext& ctx, uint8_t* base, uint32_t fighter)
 void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player, EnemyController& controller)
 {
     controller.walking = false;
-    if (Defeated(base, enemy) || Defeated(base, player))
+    const bool defeated = Defeated(base, enemy);
+    if (g_fullRoster && defeated && GRead32(base, enemy + kOnStage))
+    {
+        constexpr unsigned kDownedFramesBeforeRemoval = 75;
+        constexpr unsigned kMaxDefeatFrames = 180;
+        const bool downed = GRead8(base, enemy + kPosture) >= kFirstDownedPosture;
+        if (enemy == kPracticeExtra && (DummyInMove(base, kDummyIdle) || DummyInMove(base, kDummyRecovery)))
+        {
+            // A reduced dummy reaction can return to idle even on a lethal hit.
+            PPCContext fall = ctx;
+            fall.r3.u32 = enemy;
+            fall.r4.u32 = kDummyFall;
+            __imp__sub_823165C8(fall, base);
+        }
+        if (++controller.defeatedFrames >= kMaxDefeatFrames ||
+            (downed && controller.defeatedFrames >= kDownedFramesBeforeRemoval))
+            GWrite32(base, enemy + kOnStage, 0);
+    }
+    if (defeated || Defeated(base, player))
     {
         controller.strikePending = false;
         return;
@@ -401,6 +545,20 @@ void ApplyCameraPose(uint8_t* base, uint32_t camera)
         WriteFloat(base, camera + 0x30 + 4 * i, g_camera.up[i]);
     }
 }
+
+bool ExtraActive(uint8_t* base)
+{
+    return g_fullRoster && InPractice(base) && GRead32(base, kPracticeExtra + kOnStage);
+}
+
+uint32_t CallOnFighter(const PPCContext& ctx, uint8_t* base, PPCFunc* function, uint32_t fighter, uint32_t opponent = 0)
+{
+    PPCContext call = ctx;
+    call.r3.u32 = fighter;
+    call.r4.u32 = opponent;
+    function(call, base);
+    return call.r3.u32;
+}
 }
 
 // Practice initializes its settings here and then copies them to the pause menu.
@@ -425,7 +583,7 @@ PPC_FUNC(sub_823A70F0)
     GWrite32(base, settings + kBattlePosition, 1);
     GWrite32(base, kPracticeFlags, GRead32(base, kPracticeFlags) | kPositionReset);
     g_camera = {};
-    ResetControllers();
+    ResetControllers(base);
 }
 
 // Disable the two Practice auto-refills. The position reset has its own refill.
@@ -446,7 +604,7 @@ PPC_FUNC(sub_824D0D58)
         const uint32_t player = PlayerFighter(base);
         if (player && ctx.r3.u32 == player + kLife - 4)
         {
-            ResetControllers();
+            ResetControllers(base);
         }
     }
     __imp__sub_824D0D58(ctx, base);
@@ -469,6 +627,7 @@ PPC_FUNC(sub_822D4B68)
     const uint32_t second = ctx.r4.u32;
     if (EncounterPair(base, first, second))
     {
+        if (g_fullRoster && (Defeated(base, first) || Defeated(base, second))) return;
         const float x = ReadFloat(base, first) - ReadFloat(base, second);
         const float z = ReadFloat(base, first + 8) - ReadFloat(base, second + 8);
         if (x * x + z * z > kBodyContactDistance * kBodyContactDistance) return;
@@ -487,11 +646,189 @@ PPC_FUNC(sub_822E3E18)
     if (!RejectHit(base, ctx.r3.u32, ctx.r4.u32)) __imp__sub_822E3E18(ctx, base);
 }
 
+// The standard collision walker visits the point opponent and its partner.
+// Walk all combat pairs once in the larger encounter and retain native effects.
+PPC_FUNC(sub_822E4350)
+{
+    if (!g_fullRoster || !InPractice(base))
+    {
+        __imp__sub_822E4350(ctx, base);
+        return;
+    }
+    const uint32_t player = PlayerFighter(base);
+    for (const uint32_t enemy : Enemies(base))
+    {
+        if (!enemy || RejectHit(base, player, enemy)) continue;
+        CallOnFighter(ctx, base, __imp__sub_822E36C0, player, enemy);
+        CallOnFighter(ctx, base, __imp__sub_822E3E18, player, enemy);
+        CallOnFighter(ctx, base, __imp__sub_822E36C0, enemy, player);
+        CallOnFighter(ctx, base, __imp__sub_822E3E18, enemy, player);
+    }
+    g_runningNativePairs = true;
+    __imp__sub_822E4350(ctx, base);
+    g_runningNativePairs = false;
+}
+
+// These phases have four-slot loops even though the extra Practice actor has
+// its own pose and moveset. Run the same per-fighter routines for that actor.
+PPC_FUNC(sub_822FA6C8)
+{
+    __imp__sub_822FA6C8(ctx, base);
+    if (ExtraActive(base)) CallOnFighter(ctx, base, __imp__sub_822F8C18, kPracticeExtra);
+}
+
+PPC_FUNC(sub_822F7F48)
+{
+    __imp__sub_822F7F48(ctx, base);
+    if (!ExtraActive(base)) return;
+    // Store the starting point of each swept attack volume before the move advances.
+    const uint32_t actor = kPracticeExtra;
+    const uint32_t move = GRead32(base, actor + 280);
+    const uint32_t skeleton = CallOnFighter(ctx, base, __imp__sub_82397F60, actor);
+    const auto count = std::min<unsigned>(GRead8(base, actor + 890), 4);
+    for (unsigned i = 0; i < count; ++i)
+    {
+        if (GRead8(base, move + 97 + i * 2)) continue;
+        const uint32_t joint = GRead8(base, move + 96 + i * 2);
+        PPCContext sample = ctx;
+        sample.r1.u32 -= 128;
+        const uint32_t position = sample.r1.u32 + 80;
+        for (uint32_t offset = 0; offset < 16; offset += 4) GWrite32(base, position + offset, 0);
+        sample.r3.u32 = position;
+        sample.r4.u32 = joint;
+        sample.r5.u32 = actor + 3280;
+        sample.r6.u32 = skeleton;
+        sample.r7.u32 = actor;
+        __imp__sub_822F74C8(sample, base);
+        sample.r3.u32 = actor;
+        sample.r4.u32 = joint;
+        sample.r5.u32 = position;
+        __imp__sub_822FA720(sample, base);
+        for (uint32_t offset = 0; offset < 12; offset += 4)
+            GWrite32(base, actor + 2080 + i * 24 + offset, GRead32(base, position + offset));
+    }
+    CallOnFighter(ctx, base, __imp__sub_822FBF98, actor);
+}
+
+PPC_FUNC(sub_822FB748)
+{
+    __imp__sub_822FB748(ctx, base);
+    if (!ExtraActive(base)) return;
+    CallOnFighter(ctx, base, __imp__sub_822FAF50, kPracticeExtra);
+    CallOnFighter(ctx, base, __imp__sub_822FB4F8, kPracticeExtra);
+}
+
+PPC_FUNC(sub_822E1ED0)
+{
+    __imp__sub_822E1ED0(ctx, base);
+    if (!ExtraActive(base)) return;
+    const uint32_t actor = kPracticeExtra;
+    GWrite32(base, actor + 1148, GRead32(base, actor + 1148) & 0x1FE7FFFFu);
+    // TU3 has two 64-byte hit records. Clear the queued-hit state each tick.
+    for (const uint32_t hit : {actor + 2652, actor + 2716})
+    {
+        GWrite32(base, hit, actor);
+        for (uint32_t offset = 40; offset < 60; offset += 4) GWrite32(base, hit + offset, 0);
+        GWrite32(base, hit + 60, GRead32(base, hit + 60) & 0x60005FFFu);
+    }
+}
+
+PPC_FUNC(sub_822E2060)
+{
+    __imp__sub_822E2060(ctx, base);
+    if (ExtraActive(base)) CallOnFighter(ctx, base, __imp__sub_82317BD0, kPracticeExtra, PlayerFighter(base));
+}
+
+PPC_FUNC(sub_822E2590)
+{
+    __imp__sub_822E2590(ctx, base);
+    if (!ExtraActive(base)) return;
+    PPCContext advance = ctx;
+    advance.r3.u32 = kPracticeExtra;
+    advance.r4.u32 = PlayerFighter(base);
+    advance.r5.u32 = 0;
+    __imp__sub_82318FC0(advance, base);
+}
+
+PPC_FUNC(sub_822CD798)
+{
+    __imp__sub_822CD798(ctx, base);
+    if (!ExtraActive(base)) return;
+    const uint32_t models = GRead32(base, kFighterModels);
+    // Sample the fifth skeleton in both native model-update phases.
+    for (const uint32_t phase : {1u, 2u})
+    {
+        PPCContext sample = ctx;
+        sample.r3.u32 = models;
+        sample.r4.u32 = 4;
+        sample.r5.u32 = phase;
+        __imp__sub_82445A50(sample, base);
+    }
+    CallOnFighter(ctx, base, __imp__sub_82294410, kPracticeExtra);
+}
+
+PPC_FUNC(sub_82323CF8)
+{
+    __imp__sub_82323CF8(ctx, base);
+    if (ExtraActive(base)) CallOnFighter(ctx, base, __imp__sub_82320C88, kPracticeExtra);
+}
+
+PPC_FUNC(sub_82320C30)
+{
+    __imp__sub_82320C30(ctx, base);
+    if (!ExtraActive(base)) return;
+    GWrite16(base, kPracticeExtra + 192, GRead16(base, kPracticeExtra + 190));
+    PPCContext transform = ctx;
+    transform.r3.u32 = kPracticeExtra;
+    transform.r4.u32 = PlayerFighter(base);
+    transform.r5.u32 = 0;
+    __imp__sub_822CBD80(transform, base);
+}
+
+PPC_FUNC(sub_822E80D0)
+{
+    if (ExtraActive(base))
+    {
+        const uint32_t actor = kPracticeExtra;
+        GWrite32(base, actor + 1148, GRead32(base, actor + 1148) & ~0x80u);
+        for (const uint32_t offset : {1216u, 1220u, 1224u}) GWrite32(base, actor + offset, 0);
+        const uint32_t result = CallOnFighter(ctx, base, __imp__sub_822E75F0, actor);
+        CallOnFighter(ctx, base, __imp__sub_824D0970, actor + kLife - 4);
+        PPCContext event = ctx;
+        event.r3.u32 = actor;
+        event.r4.u32 = PlayerFighter(base);
+        event.r5.u32 = GRead32(base, actor + 2780);
+        event.r6.u32 = result;
+        __imp__sub_825582D8(event, base);
+    }
+    __imp__sub_822E80D0(ctx, base);
+}
+
+PPC_FUNC(sub_822CC7C8)
+{
+    __imp__sub_822CC7C8(ctx, base);
+    if (!ExtraActive(base)) return;
+    CallOnFighter(ctx, base, __imp__sub_82303BB0, kPracticeExtra);
+    CallOnFighter(ctx, base, __imp__sub_82396AE0, kPracticeExtra);
+    if (!GRead32(base, kPracticeExtra + 2060)) CallOnFighter(ctx, base, __imp__sub_82303840, kPracticeExtra);
+}
+
+PPC_FUNC(sub_822E31C8)
+{
+    __imp__sub_822E31C8(ctx, base);
+    if (!ExtraActive(base)) return;
+    CallOnFighter(ctx, base, __imp__sub_822E4650, kPracticeExtra);
+    CallOnFighter(ctx, base, __imp__sub_82394F48, kPracticeExtra);
+    CallOnFighter(ctx, base, __imp__sub_82317EB0, kPracticeExtra);
+    CallOnFighter(ctx, base, __imp__sub_822E2B40, kPracticeExtra);
+}
+
 // Resolve custom movement before the guest prepares this frame's hit volumes.
 PPC_FUNC(sub_82320AC8)
 {
     if (InPractice(base) && g_camera.ready)
     {
+        if (g_spawnPartner) g_fullRoster = FullRosterRequested(base);
         const uint32_t player = PlayerFighter(base);
         const auto enemies = Enemies(base);
         if (player && enemies[0])
@@ -500,24 +837,15 @@ PPC_FUNC(sub_82320AC8)
             if (!Defeated(base, player) && CanWalk(base, player)) MovePlayer(ctx, base, player);
             if (g_spawnPartner && enemies[1])
             {
-                const uint32_t partner = enemies[1];
-                // Reuse the tag partner's loaded model and moveset. Activate it
-                // after the native reset has put the roster at its start positions.
-                const uint32_t playerContact = GRead32(base, player + 156);
-                GWrite32(base, partner + kOnPoint, 1);
-                PPCContext spawn = ctx;
-                spawn.r3.u32 = partner;
-                spawn.r4.u32 = player;
-                spawn.r5.u32 = 7; // Practice position reset.
-                spawn.r6.u32 = 0; // Use the standing move.
-                __imp__sub_8231DA80(spawn, base);
-                GWrite32(base, player + 156, playerContact);
-                GWrite32(base, partner + kOnStage, 1);
-                constexpr float along = 920.0f, depth = -620.0f;
-                SetFloorPosition(ctx, base, partner,
-                    g_camera.centerX + along * g_camera.rightX - depth * g_camera.rightZ,
-                    g_camera.centerZ + along * g_camera.rightZ + depth * g_camera.rightX);
-                FaceForStrike(base, partner, player);
+                ActivateEnemy(ctx, base, enemies[1], player, 920.0f, -620.0f);
+                if (g_fullRoster)
+                {
+                    g_reassignedReserve = enemies[2];
+                    g_reserveInput = GRead32(base, enemies[2] + kUsesCpuInput);
+                    g_reserveTeam = GRead32(base, enemies[2] + kTeam);
+                    ActivateEnemy(ctx, base, enemies[2], player, 780.0f, 620.0f);
+                    ActivateEnemy(ctx, base, enemies[3], player, -450.0f, -670.0f);
+                }
                 g_spawnPartner = false;
             }
             for (unsigned i = 0; i < enemies.size(); ++i)
@@ -535,10 +863,14 @@ PPC_FUNC(sub_82320AC8)
 
 PPC_FUNC(sub_822CDA88)
 {
+    const bool registerExtra = InPractice(base) && FullRosterRequested(base);
+    const uint32_t saved = registerExtra ? GRead32(base, kFifthFighterSlot) : 0;
+    if (registerExtra) GWrite32(base, kFifthFighterSlot, kPracticeExtra);
     __imp__sub_822CDA88(ctx, base);
+    if (registerExtra) GWrite32(base, kFifthFighterSlot, saved);
     if (!InPractice(base) || !g_camera.ready) return;
     const auto enemies = Enemies(base);
-    const uint32_t actors[] = { PlayerFighter(base), enemies[0], enemies[1] };
+    const uint32_t actors[] = { PlayerFighter(base), enemies[0], enemies[1], enemies[2], enemies[3] };
     for (unsigned i = 0; i < g_motion.size(); ++i)
     {
         const uint32_t fighter = actors[i];
@@ -587,21 +919,44 @@ PPC_FUNC(sub_823AC118)
     __imp__sub_823AC118(ctx, base);
     if (!InPractice(base) || !g_camera.ready || !ctx.r3.u32 || !fighter || !held || !pressed) return;
     const auto enemies = Enemies(base);
-    if ((fighter != enemies[0] && fighter != enemies[1]) || Defeated(base, fighter) || !CanWalk(base, fighter)) return;
-    auto& enemy = g_enemies[fighter == enemies[0] ? 0 : 1];
+    const auto slot = std::find(enemies.begin(), enemies.end(), fighter);
+    if (slot == enemies.end() || Defeated(base, fighter)) return;
+    if (fighter == kPracticeExtra && GRead32(base, fighter + 212) >= 32)
+    {
+        // The dummy has native rising moves, but no pad bindings for them.
+        if (DummyInMove(base, kDummyFaceUp)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyRiseFaceUp);
+        if (DummyInMove(base, kDummyFaceDown)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyRiseFaceDown);
+    }
+    if (!CanWalk(base, fighter)) return;
+    auto& enemy = g_enemies[slot - enemies.begin()];
     if (enemy.strikePending)
     {
         enemy.strikePending = false;
         const uint32_t player = PlayerFighter(base);
         if (!player || Defeated(base, player)) return;
         FaceForStrike(base, fighter, player);
+        if (fighter == kPracticeExtra)
+        {
+            // The Practice dummy's jab is selected by its move ID, not by pad input.
+            CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyJab);
+            return;
+        }
         GWrite32(base, held, GRead32(base, held) | kEnemyStrike);
         GWrite32(base, pressed, GRead32(base, pressed) | kEnemyStrike);
     }
     else if (enemy.walking)
     {
+        if (fighter == kPracticeExtra)
+        {
+            if (!NativeWalk(base, fighter)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyApproach);
+            return;
+        }
         // Practice CPU directions are relative to the fighter. This is forward.
         GWrite32(base, held, (GRead32(base, held) & ~kDirectionButtons) | kWalkRight);
+    }
+    else if (fighter == kPracticeExtra && NativeWalk(base, fighter))
+    {
+        CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyIdle);
     }
 }
 
@@ -638,6 +993,7 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
         return;
     }
     ctx.r3.u32 &= ~kDirectionButtons;
+    if (g_fullRoster) ctx.r3.u32 &= ~kTagButton;
     if (lr != 0x82303A1Cu || !CanWalk(base, fighter)) return;
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
@@ -647,7 +1003,8 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
         if (enemy)
         {
             // Native attack movement also reads the fighter's opponent link.
-            if (EnemyPartner(base)) GWrite32(base, fighter + kOpponent, enemy);
+            // The original Practice logic treats the dummy link as a mode change.
+            if (enemy != kPracticeExtra && EnemyPartner(base)) GWrite32(base, fighter + kOpponent, enemy);
             FaceForStrike(base, fighter, enemy);
         }
         return;

@@ -58,9 +58,9 @@ instances, no Steam).
 
 Add `--tekken-force` before the image path to put **Tekken Force Test** in the main menu's
 top slot for that session. The row opens the game's Practice fighter and stage selection.
-Select **Solo** for the player and **Tag** for the CPU, pick the three fighters, and choose an
-existing stage. Both opponents enter the encounter together. Select **Solo** for the CPU to
-play against one opponent.
+Select **Tag** on both sides for four opponents. You control your first pick. Your second pick,
+the two CPU picks, and the wooden Practice dummy enter as opponents. Select **Solo** for the
+player and **Tag** for the CPU for two opponents, or choose **Solo** on both sides for one.
 
 Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
 across the floor. Fighters use stock walk animations. Diagonals move at the same speed
@@ -71,8 +71,9 @@ during the windup to evade. Attacks favor nearby opponents at a similar floor de
 direction as you press attack to favor an opponent in that direction. With Jun, try
 **X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
 equivalents are **Z** and **A + S**. **A** also performs a wake-up kick when your fighter has
-landed after a knockdown. Damage carries across hits for each fighter. The stock Practice HUD
-shows the lead opponent's health bar. Reset the encounter to restore all fighters.
+landed after a knockdown. Damage carries across hits for each fighter. In the four-opponent
+encounter, defeated opponents leave the floor shortly after their KO. The stock Practice HUD
+shows the lead CPU pick's health bar. Reset the encounter to restore all fighters.
 
 The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
 Hold **Back/View** and tap **A** on an Xbox controller to reset all fighters. With the stock
