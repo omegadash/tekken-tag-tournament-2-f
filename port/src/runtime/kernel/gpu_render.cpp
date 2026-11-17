@@ -2974,7 +2974,8 @@ std::vector<GpuOverlayRect> g_overlayRects;
 void GpuSetOverlayRects(const GpuOverlayRect* rects, unsigned count)
 {
     std::lock_guard<std::mutex> lock(g_overlayLock);
-    g_overlayRects.assign(rects, rects + count);
+    if (count) g_overlayRects.assign(rects, rects + count);
+    else g_overlayRects.clear();
 }
 
 bool GpuHwPresent(uint32_t frontBuffer, bool displaySwapRB, const uint32_t* gammaRamp, uint32_t gammaVersion)

@@ -4,7 +4,7 @@
 // select controller). This file drives that screen the way a player would, through the port's synthetic presses:
 //   * the TAG / SOLO window is answered (TAG: the roster actors need the second slot of each side), and the player's own
 //     pick is the only thing they see;
-//   * the player's partner and the CPU side's two picks are Combot (distinct costumes), the stage is Tulip Festival;
+//   * the three reserve and CPU slots use the roster's Combot and the stage is Tulip Festival;
 //   * the screen is held black from the moment the player has picked until the match is on, so no other select or stage
 //     screen shows (TekkenForceBlankScreen: an overlay rectangle).
 // The cursors, the grids and the pick rules are the game's: a side may not take a fighter twice, so the Combot's bit is
@@ -33,9 +33,7 @@ constexpr uint32_t kStageGrid = 4;
 constexpr int kCombot = 49;                       // the roster's Combot (character grid cell 53)
 constexpr int kTulipFestival = 46;                // the stage id of the Tulip Festival cell (stage grid cell 26)
 constexpr uint16_t kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008;
-constexpr uint16_t kA = 0x1000, kB = 0x2000, kX = 0x4000, kY = 0x8000;
-// The confirm button of each automatic pick: the game picks a costume with it. Player's partner, CPU lead, CPU partner.
-constexpr uint16_t kCostumeButtons[3] = { kA, kA, kA };
+constexpr uint16_t kA = 0x1000;
 
 // Cursor object fields (the same ones online_2v2_pick.cpp uses).
 constexpr uint32_t kCell = 0x38, kFreeHigh = 0x148, kPicks = 0x154, kTurn = 0x158, kState = 312;
@@ -125,7 +123,7 @@ void SetPhase(Phase p)
 }
 
 // One Combot pick on a side's cursor: go to its cell, give the side's free list the bit back, confirm.
-void PickCombot(uint8_t* base, uint32_t controller, uint32_t cursor, uint16_t button, int64_t now)
+void PickCombot(uint8_t* base, uint32_t controller, uint32_t cursor, int64_t now)
 {
     const int target = GridCell(base, GRead32(base, controller + 76), 0, kCombot);
     if (target < 0) return;
@@ -138,7 +136,7 @@ void PickCombot(uint8_t* base, uint32_t controller, uint32_t cursor, uint16_t bu
         if (const uint16_t step = GridStep(base, GRead32(base, controller + 76), cell, target)) Press(step);
         return;
     }
-    Press(button);
+    Press(kA);
 }
 }
 
@@ -234,17 +232,17 @@ void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base)
     case kPartner:
         if (GRead32(base, s0 + kPicks) >= 2) { SetPhase(kCpuLead); break; }
         if (GRead32(base, s0 + kPicks) == 1 && GRead32(base, s0 + kTurn) == 1 && GRead32(base, s0 + kState) == kPicking)
-            PickCombot(base, c, s0, kCostumeButtons[0], now);
+            PickCombot(base, c, s0, now);
         break;
     case kCpuLead:
         if (GRead32(base, s1 + kPicks) >= 1) { SetPhase(kCpuPartner); break; }
         if (GRead32(base, s1 + kState) == kSideOnePlayStyleWindow && now - g_pressAt > 450) PressTag(kLeft);
-        else if (GRead32(base, s1 + kState) == kSideOnePicking) PickCombot(base, c, s1, kCostumeButtons[1], now);
+        else if (GRead32(base, s1 + kState) == kSideOnePicking) PickCombot(base, c, s1, now);
         break;
     case kCpuPartner:
         if (GRead32(base, s1 + kPicks) >= 2) { SetPhase(kStage); break; }
         if (GRead32(base, s1 + kPicks) == 1 && GRead32(base, s1 + kState) == kSideOnePicking)
-            PickCombot(base, c, s1, kCostumeButtons[2], now);
+            PickCombot(base, c, s1, now);
         break;
     case kStage:
         if (GRead32(base, c + kStagePhase) == 1 && now - g_pressAt > 160)

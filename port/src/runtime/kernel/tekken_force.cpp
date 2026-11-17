@@ -68,6 +68,10 @@ void TekkenForceReadMoveAxes(int& horizontal, int& depth);
 extern "C" PPC_FUNC(__imp__sub_82331B50);
 extern "C" PPC_FUNC(__imp__sub_823D4690);
 extern "C" PPC_FUNC(__imp__sub_824C75F8);
+extern "C" PPC_FUNC(__imp__sub_82715898);
+extern "C" PPC_FUNC(__imp__sub_827142C0);
+extern "C" PPC_FUNC(__imp__sub_8249F158);
+extern "C" PPC_FUNC(__imp__sub_823D4D38);
 void TekkenForceBlankScreen(bool on);
 void TekkenForcePublishOverlay(uint8_t* base);
 
@@ -78,9 +82,10 @@ constexpr uint32_t kPracticeSettings = 0x82DD5F48u;
 constexpr uint32_t kFighterTable = 0x82E88878u;
 constexpr uint32_t kPracticeExtra = 0x82EA71A0u;
 constexpr uint32_t kFifthFighterSlot = kFighterTable + 4 * sizeof(uint32_t);
-constexpr uint32_t kCombotFighter = 98, kPracticeDummyFighter = 118;
+constexpr uint32_t kCombotFighter = 98, kCombotAlternate = 99, kPracticeDummyFighter = 118;
 constexpr uint32_t kCombotIdle = 1438;     // Cb_sKAM00_
 constexpr uint32_t kCombotApproach = 1439; // sWALK_00F
+constexpr uint32_t kCombotWalkMove = 1444, kCombotWalkLoop = 1445;
 constexpr uint32_t kCombotJab = 1503;      // Kz_lp00 from Combot's native move table
 constexpr uint32_t kCombotFall = 41;       // Fall_sKAM
 constexpr uint32_t kCombotFaceUp = 164, kCombotFaceDown = 176;
@@ -201,6 +206,13 @@ uint32_t EnemyFighter(uint8_t* base)
     return ActiveFighter(base, OpponentSide(base));
 }
 
+bool LoadedCombot(uint8_t* base, uint32_t fighter)
+{
+    if (!fighter || !GRead32(base, fighter + 136)) return false;
+    const uint32_t id = GRead32(base, fighter + 88);
+    return id == kCombotFighter || id == kCombotAlternate;
+}
+
 uint32_t EnemyPartner(uint8_t* base)
 {
     const uint32_t side = OpponentSide(base);
@@ -208,7 +220,7 @@ uint32_t EnemyPartner(uint8_t* base)
     const uint32_t lead = GRead32(base, kFighterTable + side * 4);
     const uint32_t reserve = lead ? GRead32(base, lead + kPartner) : 0;
     // Practice marks duplicate CPU picks as Solo even when both actors were loaded separately.
-    return reserve && GRead32(base, reserve + 88) == kCombotFighter && GRead32(base, reserve + 136) ? reserve : 0;
+    return LoadedCombot(base, reserve) ? reserve : 0;
 }
 
 uint32_t PlayerLead(uint8_t* base)
@@ -221,8 +233,7 @@ bool FullRosterRequested(uint8_t* base)
 {
     const uint32_t player = PlayerLead(base);
     const uint32_t reserve = player ? GRead32(base, player + kPartner) : 0;
-    return reserve && GRead32(base, reserve + 88) == kCombotFighter && EnemyPartner(base) &&
-           GRead32(base, kPracticeExtra + 88) == kCombotFighter && GRead32(base, kPracticeExtra + 136) &&
+    return LoadedCombot(base, reserve) && EnemyPartner(base) && LoadedCombot(base, kPracticeExtra) &&
            GRead32(base, kPracticeExtra + 3068);
 }
 
@@ -299,7 +310,11 @@ bool NativeWalk(uint8_t* base, uint32_t fighter)
     const uint32_t table = GRead32(base, moveset + 416);
     const uint32_t neutral = table + kMoveSize * GRead16(base, moveset + 138);
     const uint32_t move = GRead32(base, fighter + 280);
-    if (fighter == kPracticeExtra) return move == table + kCombotApproach * kMoveSize;
+    if (fighter == kPracticeExtra)
+    {
+        return move == table + kCombotApproach * kMoveSize ||
+               move == table + kCombotWalkMove * kMoveSize || move == table + kCombotWalkLoop * kMoveSize;
+    }
     return move > neutral && move <= neutral + 10 * kMoveSize;
 }
 
@@ -1080,11 +1095,45 @@ PPC_FUNC(sub_82331B50)
     __imp__sub_82331B50(ctx, base);
 }
 
+PPC_FUNC(sub_82715898)
+{
+    const uint32_t slot = ctx.r3.u32, character = ctx.r4.u32;
+    __imp__sub_82715898(ctx, base);
+    if (!Enabled() || slot < 1 || slot > 4 || character != 49) return;
+    // The native equipment loader copies palette zero for every actor, including duplicates.
+    // Choose one of TU3's two registered Combot palettes before it requests each actor's resources.
+    const uint32_t wardrobe = CallOnFighter(ctx, base, __imp__sub_827142C0, slot);
+    if (!wardrobe) return;
+    const uint32_t first = GRead32(base, wardrobe), end = GRead32(base, wardrobe + 4);
+    for (uint32_t item = first; item < end; item += 44)
+    {
+        PPCContext color = ctx;
+        color.r3.u32 = 0x82F320E8u; // TU3's native item and default costume palette table.
+        color.r4.u32 = character;
+        color.r5.u32 = GRead32(base, item);
+        color.r6.u32 = slot % 2 == 0 ? 1 : 0;
+        __imp__sub_8249F158(color, base);
+        if (color.r3.s32 >= 0) GWrite32(base, item + 4, color.r3.u32);
+    }
+}
+
 PPC_FUNC(sub_823D4690)
 {
     // This is the native draw entry for one of the four roster health gauges.
     if (InPractice(base) && GRead32(base, ctx.r3.u32 + 16) != GRead32(base, kPracticeSettings + 100)) return;
     __imp__sub_823D4690(ctx, base);
+}
+
+PPC_FUNC(sub_823D4D38)
+{
+    if (InPractice(base))
+    {
+        const uint32_t cpuSide = OpponentSide(base);
+        const bool portrait = ctx.lr == 0x823D56B4u && ctx.r5.u32 == 7 - cpuSide;
+        const bool name = ctx.lr == 0x823D6964u && ctx.r5.u32 == 35 + cpuSide;
+        if (portrait || name) return;
+    }
+    __imp__sub_823D4D38(ctx, base);
 }
 
 PPC_FUNC(sub_824C75F8)

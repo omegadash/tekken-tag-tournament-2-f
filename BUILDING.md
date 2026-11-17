@@ -57,10 +57,9 @@ instances, no Steam).
 ### Tekken Force test encounter
 
 Add `--tekken-force` before the image path to put **Tekken Force Test** in the main menu's
-top slot for that session. The row opens the game's Practice fighter and stage selection.
-Select **Tag** on both sides for four opponents. You control your first pick. Your second pick,
-the two CPU picks, and the wooden Practice dummy enter as opponents. Select **Solo** for the
-player and **Tag** for the CPU for two opponents, or choose **Solo** on both sides for one.
+top slot for that session. Select one fighter to control. The game loads Tulip Festival and
+four Combot opponents automatically.
+The installed TU3 palette table provides two Combot color schemes, which repeat across the group.
 
 Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
 across the floor. Fighters use stock walk animations. Diagonals move at the same speed
@@ -71,9 +70,9 @@ during the windup to evade. Attacks favor nearby opponents at a similar floor de
 direction as you press attack to favor an opponent in that direction. With Jun, try
 **X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
 equivalents are **Z** and **A + S**. **A** also performs a wake-up kick when your fighter has
-landed after a knockdown. Damage carries across hits for each fighter. In the four-opponent
-encounter, defeated opponents leave the floor shortly after their KO. The stock Practice HUD
-shows the lead CPU pick's health bar. Reset the encounter to restore all fighters.
+landed after a knockdown. The player's life bar is at the top. Each Combot has its own smaller
+bar at the bottom. An enemy's empty bar clears when it leaves the floor after a knockout.
+Reset the encounter to restore all fighters and their life bars.
 
 The encounter starts with **Position Settings → Battle Position → Default Position** enabled.
 Hold **Back/View** and tap **A** on an Xbox controller to reset all fighters. With the stock
