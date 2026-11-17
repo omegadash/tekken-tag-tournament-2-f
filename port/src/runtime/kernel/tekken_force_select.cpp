@@ -238,7 +238,7 @@ void TekkenForceSelectFrame(PPCContext& ctx, uint8_t* base)
         break;
     case kCpuLead:
         if (GRead32(base, s1 + kPicks) >= 1) { SetPhase(kCpuPartner); break; }
-        if (GRead32(base, s1 + kState) == kSideOnePlayStyleWindow && now - g_pressAt > 450) PressTag(kRight);
+        if (GRead32(base, s1 + kState) == kSideOnePlayStyleWindow && now - g_pressAt > 450) PressTag(kLeft);
         else if (GRead32(base, s1 + kState) == kSideOnePicking) PickCombot(base, c, s1, kCostumeButtons[1], now);
         break;
     case kCpuPartner:
