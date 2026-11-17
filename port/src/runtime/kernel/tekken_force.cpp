@@ -624,7 +624,9 @@ void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player
     }
     else
     {
-        // Wait around the player instead of stacking every Combot at jab range.
+        // Follow a retreating player, but hold when close so waiting enemies do
+        // not continually back away from the player's attacks.
+        if (range < 1500.0f) return;
         const float waitAlong = index % 2 == 0 ? -1100.0f : 1100.0f;
         const float waitDepth = index < 2 ? -700.0f : 700.0f;
         forward = along + waitAlong;
