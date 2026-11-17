@@ -42,6 +42,10 @@ void GpuHwResolve(uint32_t colorBase, uint32_t destBase, uint32_t pitch, uint32_
 void GpuHwCompareResolve(uint32_t destBase, const uint32_t* cpuLinear, uint32_t pitch, uint32_t height);
 // gammaRamp: the guest's 256-entry display gamma table (DC_LUT_30_COLOR words); gammaVersion
 // changes whenever it was written.
+// Solid rectangles the presenter draws over the finished picture (Tekken Force's enemy life bars, and its black frame
+// while character select is hidden). Positions are fractions of the 16:9 picture. Replaces the whole set; count 0 clears.
+struct GpuOverlayRect { float x, y, w, h, r, g, b; };
+void GpuSetOverlayRects(const GpuOverlayRect* rects, unsigned count);
 bool GpuHwPresent(uint32_t frontBuffer, bool displaySwapRB, const uint32_t* gammaRamp, uint32_t gammaVersion);
 bool GpuHwReadFrontBuffer(uint32_t* bgrx1280x720);
 // The swap chain is in exclusive fullscreen (display_settings Fullscreen, window in front).

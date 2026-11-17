@@ -897,8 +897,13 @@ void PollPadsOnce(PadPollState& polling, bool autoStart, uint64_t elapsedMs, Pad
     // AUTOSTART is an explicit unattended test mode. Apply its START pulse to
     // controller 0 even when a physical pad is present or the window is inactive.
     const bool startPulse = autoStart && elapsedMs > 45000 && (elapsedMs % 9000) < 300;
-    // Scripted presses join the keyboard's (controller 0, foreground not required).
-    const KeyboardPad keyboard = ReadKeyboardPad();
+    // Keep unattended playtests independent of a controller in use by another app.
+    static const bool scriptOnly = [] {
+        const char* value = std::getenv("TTT2_INPUT_SCRIPT_ONLY");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    const bool ignoreHardware = scriptOnly && script && script->active;
+    const KeyboardPad keyboard = ignoreHardware ? KeyboardPad{} : ReadKeyboardPad();
     uint8_t stick1 = 0, stick2 = 0;
     const uint16_t keyboardButtons = keyboard.buttons | (script ? ScriptButtons(*script, elapsedMs, 0, &stick1) : 0);
     {
@@ -917,7 +922,7 @@ void PollPadsOnce(PadPollState& polling, bool autoStart, uint64_t elapsedMs, Pad
     polling.keyboardEverPressed |= keyboardButtons != 0 || keyboard.leftTrigger || keyboard.rightTrigger;
     XINPUT_STATE sampled[4]{};
     XINPUT_CAPABILITIES hostCaps[4]{};
-    for (DWORD i = 0; i < 4; ++i)
+    for (DWORD i = 0; !ignoreHardware && i < 4; ++i)
     {
         // Sampling depends only on the physical device, never on a synthesized
         // keyboard pad's published connection flag. Probe slot 0 on startup too.

@@ -1,8 +1,12 @@
 #include "kernel_shared.h"
+#include "gpu_render.h"
 #include <algorithm>
+#include <vector>
+#include <atomic>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <numbers>
@@ -61,6 +65,15 @@ extern "C" PPC_FUNC(__imp__sub_824D0970);
 extern "C" PPC_FUNC(__imp__sub_825582D8);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
 void TekkenForceReadMoveAxes(int& horizontal, int& depth);
+extern "C" PPC_FUNC(__imp__sub_82331B50);
+extern "C" PPC_FUNC(__imp__sub_823D4690);
+extern "C" PPC_FUNC(__imp__sub_824C75F8);
+extern "C" PPC_FUNC(__imp__sub_82715898);
+extern "C" PPC_FUNC(__imp__sub_827142C0);
+extern "C" PPC_FUNC(__imp__sub_8249F158);
+extern "C" PPC_FUNC(__imp__sub_823D4D38);
+void TekkenForceBlankScreen(bool on);
+void TekkenForcePublishOverlay(uint8_t* base);
 
 namespace {
 constexpr uint32_t kBattleState = 0x82EAC03Cu;
@@ -69,13 +82,14 @@ constexpr uint32_t kPracticeSettings = 0x82DD5F48u;
 constexpr uint32_t kFighterTable = 0x82E88878u;
 constexpr uint32_t kPracticeExtra = 0x82EA71A0u;
 constexpr uint32_t kFifthFighterSlot = kFighterTable + 4 * sizeof(uint32_t);
-constexpr uint32_t kDummyIdle = 723;     // Pm_sKAM00_
-constexpr uint32_t kDummyRecovery = 768; // Pm_count_kam
-constexpr uint32_t kDummyApproach = 102; // Co_Dummy_04, the dummy's dash clip.
-constexpr uint32_t kDummyJab = 770;      // Pm_count_lp01
-constexpr uint32_t kDummyFall = 734;     // Fall_sKAM
-constexpr uint32_t kDummyFaceUp = 744, kDummyFaceDown = 757;
-constexpr uint32_t kDummyRiseFaceUp = 755, kDummyRiseFaceDown = 760;
+constexpr uint32_t kCombotFighter = 98, kCombotAlternate = 99, kPracticeDummyFighter = 118;
+constexpr uint32_t kCombotIdle = 1438;     // Cb_sKAM00_
+constexpr uint32_t kCombotApproach = 1439; // sWALK_00F
+constexpr uint32_t kCombotWalkMove = 1444, kCombotWalkLoop = 1445;
+constexpr uint32_t kCombotJab = 1503;      // Kz_lp00 from Combot's native move table
+constexpr uint32_t kCombotFall = 41;       // Fall_sKAM
+constexpr uint32_t kCombotFaceUp = 164, kCombotFaceDown = 176;
+constexpr uint32_t kCombotRiseFaceUp = 188, kCombotRiseFaceDown = 235;
 constexpr uint32_t kScene = 0x82E6B05Cu;
 constexpr uint32_t kFighterModels = 0x82E6B540u;
 constexpr uint32_t kCameraManagerOffset = 724;
@@ -192,13 +206,21 @@ uint32_t EnemyFighter(uint8_t* base)
     return ActiveFighter(base, OpponentSide(base));
 }
 
+bool LoadedCombot(uint8_t* base, uint32_t fighter)
+{
+    if (!fighter || !GRead32(base, fighter + 136)) return false;
+    const uint32_t id = GRead32(base, fighter + 88);
+    return id == kCombotFighter || id == kCombotAlternate;
+}
+
 uint32_t EnemyPartner(uint8_t* base)
 {
     const uint32_t side = OpponentSide(base);
     if (side > 1) return 0;
     const uint32_t lead = GRead32(base, kFighterTable + side * 4);
-    // TU3 still allocates a reserve actor for a Solo side.
-    return lead && !GRead32(base, lead + kSolo) ? GRead32(base, lead + kPartner) : 0;
+    const uint32_t reserve = lead ? GRead32(base, lead + kPartner) : 0;
+    // Practice marks duplicate CPU picks as Solo even when both actors were loaded separately.
+    return LoadedCombot(base, reserve) ? reserve : 0;
 }
 
 uint32_t PlayerLead(uint8_t* base)
@@ -210,8 +232,9 @@ uint32_t PlayerLead(uint8_t* base)
 bool FullRosterRequested(uint8_t* base)
 {
     const uint32_t player = PlayerLead(base);
-    return player && !GRead32(base, player + kSolo) && EnemyPartner(base) &&
-           GRead32(base, kPracticeExtra + 136) && GRead32(base, kPracticeExtra + 3068);
+    const uint32_t reserve = player ? GRead32(base, player + kPartner) : 0;
+    return LoadedCombot(base, reserve) && EnemyPartner(base) && LoadedCombot(base, kPracticeExtra) &&
+           GRead32(base, kPracticeExtra + 3068);
 }
 
 std::array<uint32_t, kMaxEnemies> Enemies(uint8_t* base)
@@ -287,11 +310,15 @@ bool NativeWalk(uint8_t* base, uint32_t fighter)
     const uint32_t table = GRead32(base, moveset + 416);
     const uint32_t neutral = table + kMoveSize * GRead16(base, moveset + 138);
     const uint32_t move = GRead32(base, fighter + 280);
-    if (fighter == kPracticeExtra) return move == table + kDummyApproach * kMoveSize;
+    if (fighter == kPracticeExtra)
+    {
+        return move == table + kCombotApproach * kMoveSize ||
+               move == table + kCombotWalkMove * kMoveSize || move == table + kCombotWalkLoop * kMoveSize;
+    }
     return move > neutral && move <= neutral + 10 * kMoveSize;
 }
 
-bool DummyInMove(uint8_t* base, uint32_t moveId)
+bool ExtraInMove(uint8_t* base, uint32_t moveId)
 {
     constexpr uint32_t kMoveSize = 112;
     const uint32_t table = GRead32(base, GRead32(base, kPracticeExtra + 136) + 416);
@@ -303,7 +330,7 @@ bool CanWalk(uint8_t* base, uint32_t fighter)
     const uint8_t posture = GRead8(base, fighter + kPosture);
     if (fighter == kPracticeExtra && posture < kFirstDownedPosture)
     {
-        return NativeWalk(base, fighter) || DummyInMove(base, kDummyIdle) || DummyInMove(base, kDummyRecovery);
+        return NativeWalk(base, fighter) || ExtraInMove(base, kCombotIdle);
     }
     return posture == kStanding || (posture < kFirstDownedPosture && NativeWalk(base, fighter));
 }
@@ -462,12 +489,12 @@ void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player
         constexpr unsigned kDownedFramesBeforeRemoval = 75;
         constexpr unsigned kMaxDefeatFrames = 180;
         const bool downed = GRead8(base, enemy + kPosture) >= kFirstDownedPosture;
-        if (enemy == kPracticeExtra && (DummyInMove(base, kDummyIdle) || DummyInMove(base, kDummyRecovery)))
+        if (enemy == kPracticeExtra && ExtraInMove(base, kCombotIdle))
         {
-            // A reduced dummy reaction can return to idle even on a lethal hit.
+            // The extra actor can return to idle after a reduced lethal reaction.
             PPCContext fall = ctx;
             fall.r3.u32 = enemy;
-            fall.r4.u32 = kDummyFall;
+            fall.r4.u32 = kCombotFall;
             __imp__sub_823165C8(fall, base);
         }
         if (++controller.defeatedFrames >= kMaxDefeatFrames ||
@@ -826,8 +853,10 @@ PPC_FUNC(sub_822E31C8)
 // Resolve custom movement before the guest prepares this frame's hit volumes.
 PPC_FUNC(sub_82320AC8)
 {
+    TekkenForcePublishOverlay(base);
     if (InPractice(base) && g_camera.ready)
     {
+        TekkenForceBlankScreen(false);   // the select hid itself until the encounter is up
         if (g_spawnPartner) g_fullRoster = FullRosterRequested(base);
         const uint32_t player = PlayerFighter(base);
         const auto enemies = Enemies(base);
@@ -840,6 +869,8 @@ PPC_FUNC(sub_82320AC8)
                 ActivateEnemy(ctx, base, enemies[1], player, 920.0f, -620.0f);
                 if (g_fullRoster)
                 {
+                    GWrite32(base, enemies[0] + kSolo, 0);
+                    GWrite32(base, enemies[1] + kSolo, 0);
                     g_reassignedReserve = enemies[2];
                     g_reserveInput = GRead32(base, enemies[2] + kUsesCpuInput);
                     g_reserveTeam = GRead32(base, enemies[2] + kTeam);
@@ -923,9 +954,9 @@ PPC_FUNC(sub_823AC118)
     if (slot == enemies.end() || Defeated(base, fighter)) return;
     if (fighter == kPracticeExtra && GRead32(base, fighter + 212) >= 32)
     {
-        // The dummy has native rising moves, but no pad bindings for them.
-        if (DummyInMove(base, kDummyFaceUp)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyRiseFaceUp);
-        if (DummyInMove(base, kDummyFaceDown)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyRiseFaceDown);
+        // Drive the extra actor's recovery with its native floor moves.
+        if (ExtraInMove(base, kCombotFaceUp)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotRiseFaceUp);
+        if (ExtraInMove(base, kCombotFaceDown)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotRiseFaceDown);
     }
     if (!CanWalk(base, fighter)) return;
     auto& enemy = g_enemies[slot - enemies.begin()];
@@ -937,8 +968,7 @@ PPC_FUNC(sub_823AC118)
         FaceForStrike(base, fighter, player);
         if (fighter == kPracticeExtra)
         {
-            // The Practice dummy's jab is selected by its move ID, not by pad input.
-            CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyJab);
+            CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotJab);
             return;
         }
         GWrite32(base, held, GRead32(base, held) | kEnemyStrike);
@@ -948,7 +978,7 @@ PPC_FUNC(sub_823AC118)
     {
         if (fighter == kPracticeExtra)
         {
-            if (!NativeWalk(base, fighter)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyApproach);
+            if (!NativeWalk(base, fighter)) CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotApproach);
             return;
         }
         // Practice CPU directions are relative to the fighter. This is forward.
@@ -956,7 +986,7 @@ PPC_FUNC(sub_823AC118)
     }
     else if (fighter == kPracticeExtra && NativeWalk(base, fighter))
     {
-        CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kDummyIdle);
+        CallOnFighter(ctx, base, __imp__sub_823165C8, fighter, kCombotIdle);
     }
 }
 
@@ -1014,5 +1044,108 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
     {
         const uint32_t enemy = AttackTarget(base, fighter, 0, 0);
         ctx.r3.u32 |= WalkDirection(enemy ? AlongBetween(base, fighter, enemy) : 1.0f);
+    }
+}
+
+// ---- HUD: one player bar at the top, a compact bar per Combot at the bottom (host overlay, gpu_render.h).
+// Draw the four enemy bars over the finished picture using each actor's life and maximum health.
+namespace {
+std::atomic<bool> g_blank{ false };
+}
+
+void TekkenForceBlankScreen(bool on)
+{
+    static const bool keep = [] { const char* e = std::getenv("TTT2_TF_NOBLANK"); return e && *e == '1'; }();
+    g_blank.store(on && !keep, std::memory_order_relaxed);
+}
+
+void TekkenForcePublishOverlay(uint8_t* base)
+{
+    if (!Enabled()) return;
+    static bool published = false;
+    std::vector<GpuOverlayRect> rects;
+    if (g_blank.load(std::memory_order_relaxed))
+        rects.push_back({ 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f });
+    else if (InPractice(base) && g_camera.ready)
+    {
+        const auto enemies = Enemies(base);
+        for (unsigned i = 0; i < enemies.size(); ++i)
+        {
+            const uint32_t enemy = enemies[i];
+            if (!enemy || !GRead32(base, enemy + kOnStage)) continue;
+            const float life = float(GRead32(base, enemy + kLife)) / 65536.0f;
+            const float maxLife = std::max(1.0f, float(GRead32(base, enemy + 108)) / 65536.0f);
+            const float fraction = std::clamp(life / maxLife, 0.0f, 1.0f);
+            const float x = 0.07f + 0.23f * float(i), y = 0.945f, w = 0.20f, h = 0.020f;
+            rects.push_back({ x - 0.003f, y - 0.006f, w + 0.006f, h + 0.012f, 0.0f, 0.0f, 0.0f });
+            rects.push_back({ x, y, w, h, 0.28f, 0.06f, 0.06f });
+            if (fraction > 0.0f) rects.push_back({ x, y, w * fraction, h, 0.92f, 0.18f, 0.10f });
+        }
+    }
+    if (rects.empty() && !published) return;
+    published = !rects.empty();
+    GpuSetOverlayRects(rects.data(), unsigned(rects.size()));
+}
+
+PPC_FUNC(sub_82331B50)
+{
+    // Replace the fifth actor's character before the battle loader generates its model command.
+    if (Enabled() && ctx.r4.u32 == 4 && ctx.r5.u32 == kPracticeDummyFighter)
+        ctx.r5.u32 = kCombotFighter;
+    __imp__sub_82331B50(ctx, base);
+}
+
+PPC_FUNC(sub_82715898)
+{
+    const uint32_t slot = ctx.r3.u32, character = ctx.r4.u32;
+    __imp__sub_82715898(ctx, base);
+    if (!Enabled() || slot < 1 || slot > 4 || character != 49) return;
+    // The native equipment loader copies palette zero for every actor, including duplicates.
+    // Choose one of TU3's two registered Combot palettes before it requests each actor's resources.
+    const uint32_t wardrobe = CallOnFighter(ctx, base, __imp__sub_827142C0, slot);
+    if (!wardrobe) return;
+    const uint32_t first = GRead32(base, wardrobe), end = GRead32(base, wardrobe + 4);
+    for (uint32_t item = first; item < end; item += 44)
+    {
+        PPCContext color = ctx;
+        color.r3.u32 = 0x82F320E8u; // TU3's native item and default costume palette table.
+        color.r4.u32 = character;
+        color.r5.u32 = GRead32(base, item);
+        color.r6.u32 = slot % 2 == 0 ? 1 : 0;
+        __imp__sub_8249F158(color, base);
+        if (color.r3.s32 >= 0) GWrite32(base, item + 4, color.r3.u32);
+    }
+}
+
+PPC_FUNC(sub_823D4690)
+{
+    // This is the native draw entry for one of the four roster health gauges.
+    if (InPractice(base) && GRead32(base, ctx.r3.u32 + 16) != GRead32(base, kPracticeSettings + 100)) return;
+    __imp__sub_823D4690(ctx, base);
+}
+
+PPC_FUNC(sub_823D4D38)
+{
+    if (InPractice(base))
+    {
+        const uint32_t cpuSide = OpponentSide(base);
+        const bool portrait = ctx.lr == 0x823D56B4u && ctx.r5.u32 == 7 - cpuSide;
+        const bool name = ctx.lr == 0x823D6964u && ctx.r5.u32 == 35 + cpuSide;
+        if (portrait || name) return;
+    }
+    __imp__sub_823D4D38(ctx, base);
+}
+
+PPC_FUNC(sub_824C75F8)
+{
+    const uint32_t slot = ctx.r4.u32, request = ctx.r5.u32;
+    __imp__sub_824C75F8(ctx, base);
+    if (Enabled() && slot == 4 && !ctx.r3.u32 && GRead32(base, kPracticeExtra + 88) == kCombotFighter)
+    {
+        // The extra Practice slot has no registered costume resources for these component pairs.
+        // Let the native queue retire the missing requests so the base Combot can finish loading.
+        const uint32_t kind = GRead32(base, request + 44), variant = GRead32(base, request + 48);
+        if ((kind == 66 && variant == 0) || (kind == 51 && variant == 52) || (kind == 71 && variant == 72))
+            ctx.r3.u32 = 1;
     }
 }
