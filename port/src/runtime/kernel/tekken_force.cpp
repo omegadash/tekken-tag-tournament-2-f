@@ -1,6 +1,7 @@
 #include "kernel_shared.h"
 #include "gpu_render.h"
 #include "tekken_force_settings.h"
+#include "tekken_force_controls.h"
 #include <algorithm>
 #include <vector>
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <numbers>
+#include <chrono>
 
 extern "C" PPC_FUNC(__imp__sub_823A70F0);
 extern "C" PPC_FUNC(__imp__sub_823A9700);
@@ -20,6 +22,9 @@ extern "C" PPC_FUNC(__imp__sub_823AC118);
 extern "C" PPC_FUNC(__imp__sub_824D0D58);
 extern "C" PPC_FUNC(__imp__sub_824D0D78);
 extern "C" PPC_FUNC(__imp__sub_82545EE0);
+extern "C" PPC_FUNC(__imp__sub_82541C90);
+extern "C" PPC_FUNC(__imp__sub_82542D18);
+extern "C" PPC_FUNC(__imp__sub_822CB9F0);
 extern "C" PPC_FUNC(__imp__sub_82294410);
 extern "C" PPC_FUNC(__imp__sub_822CC7C8);
 extern "C" PPC_FUNC(__imp__sub_822CBD80);
@@ -66,6 +71,7 @@ extern "C" PPC_FUNC(__imp__sub_824D0970);
 extern "C" PPC_FUNC(__imp__sub_825582D8);
 extern "C" PPC_FUNC(__imp__sub_825B75B0);
 void TekkenForceReadMoveAxes(int& horizontal, int& depth);
+uint16_t TekkenForceReadButtons();
 extern "C" PPC_FUNC(__imp__sub_82331B50);
 extern "C" PPC_FUNC(__imp__sub_823D4690);
 extern "C" PPC_FUNC(__imp__sub_824C75F8);
@@ -109,16 +115,13 @@ constexpr uint32_t kUsesCpuInput = 1032;
 constexpr uint32_t kOnPoint = 7792;
 constexpr uint32_t kTeam = 7936;
 constexpr uint32_t kPosture = 875;
-constexpr uint8_t kStanding = 3;
 constexpr uint8_t kFirstDownedPosture = 12;
 constexpr float kWalkStep = 24.0f;
-constexpr float kAttackDepth = 320.0f;
 constexpr float kBodyContactDistance = 420.0f;
 constexpr float kEnemyStep = 14.0f;
 constexpr float kEnemyRunStep = 42.0f;
 constexpr float kEnemyStrikeRange = 700.0f;
 constexpr float kEnemyApproachGap = 645.0f;
-constexpr float kEnemyAlignDepth = 115.0f;
 constexpr unsigned kEnemyStartDelay = 45;
 constexpr unsigned kEnemyWindup = 18;
 constexpr unsigned kEnemyRecovery = 54;
@@ -138,6 +141,8 @@ struct FixedCamera
     float rightZ = 0.0f;
     float pullback = 1.5f;
     float followX = 0.0f, followZ = 0.0f;
+    std::array<uint32_t, 8> lens{};
+    std::array<uint32_t, 16> projection{};
 };
 
 FixedCamera g_camera;
@@ -153,6 +158,8 @@ struct EnemyController
     unsigned defeatedFrames = 0;
     bool entering = true;
     uint32_t entryLife = 0;
+    uint32_t lastLife = 0;
+    unsigned disengageFrames = 0;
 };
 
 constexpr unsigned kMaxEnemies = 4;
@@ -161,6 +168,9 @@ int g_attackOwner = -1;
 unsigned g_nextAttacker = 0;
 unsigned g_attackPause = kEnemyStartDelay;
 unsigned g_turnFrames = 0;
+uint32_t g_target = 0;
+tekken_force::PlayerControls g_controls;
+tekken_force::TargetAction g_targetAction = tekken_force::TargetAction::None;
 thread_local int g_drawingEnemyGauge = -1;
 thread_local bool g_gaugeMirrored = false;
 thread_local bool g_firstGaugeSprite = false;
@@ -177,10 +187,12 @@ struct FloorMotion
     uint32_t fighter = 0;
     float x = 0.0f, z = 0.0f;
     bool walking = false;
+    uint32_t life = 0;
 };
 
 std::array<FloorMotion, kMaxEnemies + 1> g_motion;
 std::array<FloorMotion, kMaxEnemies> g_entryMotion;
+std::array<FloorMotion, kMaxEnemies + 1> g_walkMotion;
 
 bool Enabled()
 {
@@ -282,6 +294,9 @@ void ResetControllers(uint8_t* base)
     g_nextAttacker = 0;
     g_attackPause = kEnemyStartDelay;
     g_turnFrames = 0;
+    g_target = 0;
+    g_controls = {};
+    g_targetAction = tekken_force::TargetAction::None;
     const float previousPullback = g_camera.pullback;
     g_camera.pullback = 1.0f + tekken_force::LoadCameraPullbackPercent() / 100.0f;
     if (g_camera.ready)
@@ -292,6 +307,7 @@ void ResetControllers(uint8_t* base)
     g_fullRoster = false;
     g_motion = {};
     g_entryMotion = {};
+    g_walkMotion = {};
 }
 
 bool Defeated(uint8_t* base, uint32_t fighter)
@@ -319,11 +335,6 @@ uint32_t RenderCamera(uint8_t* base)
 float FloorDepth(float x, float z)
 {
     return -x * g_camera.rightZ + z * g_camera.rightX;
-}
-
-uint32_t WalkDirection(float along)
-{
-    return along < 0.0f ? kWalkLeft : kWalkRight;
 }
 
 bool NativeWalk(uint8_t* base, uint32_t fighter)
@@ -356,23 +367,15 @@ bool ExtraInMove(uint8_t* base, uint32_t moveId)
 bool CanWalk(uint8_t* base, uint32_t fighter)
 {
     const uint8_t posture = GRead8(base, fighter + kPosture);
-    if (fighter == kPracticeExtra && posture < kFirstDownedPosture)
-    {
-        return NativeWalk(base, fighter) || ExtraInMove(base, kCombotIdle);
-    }
-    return posture == kStanding || (posture < kFirstDownedPosture && NativeWalk(base, fighter));
+    const uint32_t moveset = GRead32(base, fighter + 136);
+    if (!moveset || posture >= kFirstDownedPosture) return false;
+    const uint32_t neutral = GRead32(base, moveset + 416) + 112 * GRead16(base, moveset + 138);
+    // An attack can have standing posture too. Arena walking must not cancel it.
+    return GRead32(base, fighter + 280) == neutral || NativeWalk(base, fighter);
 }
 
-float AlongBetween(uint8_t* base, uint32_t from, uint32_t to)
+void FaceDirection(uint8_t* base, uint32_t fighter, float x, float z)
 {
-    return (ReadFloat(base, to) - ReadFloat(base, from)) * g_camera.rightX +
-           (ReadFloat(base, to + 8) - ReadFloat(base, from + 8)) * g_camera.rightZ;
-}
-
-void FaceForStrike(uint8_t* base, uint32_t fighter, uint32_t target)
-{
-    const float x = ReadFloat(base, target) - ReadFloat(base, fighter);
-    const float z = ReadFloat(base, target + 8) - ReadFloat(base, fighter + 8);
     if (std::abs(x) + std::abs(z) < 1.0f) return;
     const float radians = std::atan2(x, z);
     const auto angle = static_cast<uint16_t>(std::lround(radians * (32768.0f / std::numbers::pi_v<float>)));
@@ -380,6 +383,33 @@ void FaceForStrike(uint8_t* base, uint32_t fighter, uint32_t target)
     GWrite16(base, fighter + 190, angle);
     WriteFloat(base, fighter + 32, radians);
     WriteFloat(base, fighter + 184, radians);
+}
+
+void FaceForStrike(uint8_t* base, uint32_t fighter, uint32_t target)
+{
+    FaceDirection(base,fighter,ReadFloat(base,target)-ReadFloat(base,fighter),
+        ReadFloat(base,target+8)-ReadFloat(base,fighter+8));
+}
+
+void SamplePlayerControls()
+{
+    int horizontal,depth;
+    TekkenForceReadMoveAxes(horizontal,depth);
+    const uint16_t buttons=TekkenForceReadButtons();
+    const uint64_t now=uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    const auto action=g_controls.Sample(now,(buttons&0x0200u)!=0,depth,(buttons&0xF000u)!=0);
+    if (action!=tekken_force::TargetAction::None) g_targetAction=action;
+}
+
+void FaceFreeMovement(uint8_t* base,uint32_t fighter)
+{
+    if (!CanWalk(base,fighter) || (TekkenForceReadButtons()&0xF000u)) return;
+    int horizontal,depth;
+    TekkenForceReadMoveAxes(horizontal,depth);
+    if (horizontal || depth)
+        FaceDirection(base,fighter,horizontal*g_camera.rightX-depth*g_camera.rightZ,
+            horizontal*g_camera.rightZ+depth*g_camera.rightX);
 }
 
 bool EncounterPair(uint8_t* base, uint32_t first, uint32_t second)
@@ -398,13 +428,13 @@ bool RejectHit(uint8_t* base, uint32_t attacker, uint32_t defender)
     }
     if (!EncounterPair(base, attacker, defender)) return false;
     if (g_runningNativePairs) return true;
-    const float depth = FloorDepth(ReadFloat(base, attacker) - ReadFloat(base, defender),
-                                   ReadFloat(base, attacker + 8) - ReadFloat(base, defender + 8));
-    return Defeated(base, attacker) || Defeated(base, defender) || std::abs(depth) > kAttackDepth;
+    return Defeated(base, attacker) || Defeated(base, defender) ||
+           !GRead32(base, attacker + kOnStage) || !GRead32(base, defender + kOnStage);
 }
 
 uint32_t AttackTarget(uint8_t* base, uint32_t player, int horizontal, int depth)
 {
+    if (g_target && !Defeated(base, g_target) && GRead32(base, g_target + kOnStage)) return g_target;
     uint32_t target = 0;
     float bestScore = 0.0f;
     const float inputLength = std::hypot(float(horizontal), float(depth));
@@ -415,7 +445,7 @@ uint32_t AttackTarget(uint8_t* base, uint32_t player, int horizontal, int depth)
         const float z = ReadFloat(base, enemy + 8) - ReadFloat(base, player + 8);
         const float across = FloorDepth(x, z);
         const float distance = std::hypot(x, z);
-        float score = distance + std::max(0.0f, std::abs(across) - kAttackDepth) * 4.0f;
+        float score = distance;
         if (inputLength > 0.0f && distance > 1.0f)
         {
             const float along = x * g_camera.rightX + z * g_camera.rightZ;
@@ -429,6 +459,46 @@ uint32_t AttackTarget(uint8_t* base, uint32_t player, int horizontal, int depth)
         }
     }
     return target;
+}
+
+void UpdateTarget(uint8_t* base, uint32_t player)
+{
+    SamplePlayerControls();
+    const uint32_t previous = g_target;
+    const auto enemies = Enemies(base);
+    const auto action=g_targetAction;
+    g_targetAction=tekken_force::TargetAction::None;
+    const auto valid = [&](uint32_t enemy) {
+        return enemy && !Defeated(base, enemy) && GRead32(base, enemy + kOnStage);
+    };
+    if (action==tekken_force::TargetAction::Release || g_controls.freeMovement)
+    {
+        g_target=0;
+        FaceFreeMovement(base,player);
+    }
+    else if (action==tekken_force::TargetAction::Cycle)
+    {
+        auto current = std::find(enemies.begin(), enemies.end(), g_target);
+        const unsigned start = current == enemies.end() ? 0 : unsigned(current - enemies.begin()) + 1;
+        for (unsigned step = 0; step < enemies.size(); ++step)
+        {
+            const uint32_t candidate = enemies[(start + step) % enemies.size()];
+            if (valid(candidate)) { g_target = candidate; break; }
+        }
+    }
+    if (action==tekken_force::TargetAction::Nearest) g_target=0;
+    if (!g_controls.freeMovement && !valid(g_target))
+    {
+        g_target = 0;
+        g_target = AttackTarget(base, player, 0, 0);
+    }
+    if (!g_controls.freeMovement && !g_target) g_controls.freeMovement=true;
+    // Practice uses the extra actor's opponent link as a mode selector. Keep
+    // its roster link stable and bind the actual target in the pose/hit paths.
+    if (g_target && g_target != kPracticeExtra) GWrite32(base, player + kOpponent, g_target);
+    if (g_target && CanWalk(base, player)) FaceForStrike(base, player, g_target);
+    if ((g_target != previous || action!=tekken_force::TargetAction::None) && std::getenv("TTT2_TF_DIAG"))
+        std::fprintf(stderr, "[tf-target] actor=%08X free=%u\n", g_target,unsigned(g_controls.freeMovement));
 }
 
 void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x, float z)
@@ -495,8 +565,8 @@ void MoveOnFloor(PPCContext& ctx, uint8_t* base, uint32_t fighter, float alongSt
 void ReconcileWalk(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorMotion& motion)
 {
     const bool walking = NativeWalk(base, fighter);
-    const bool walkEnded = motion.walking && GRead8(base, fighter + kPosture) == kStanding;
-    if (motion.fighter == fighter && (walking || walkEnded))
+    const bool walkEnded = motion.walking && CanWalk(base, fighter);
+    if (motion.fighter == fighter && motion.life == GRead32(base,fighter+kLife) && (walking || walkEnded))
         SetFloorPosition(ctx, base, fighter, motion.x, motion.z);
     motion.walking = walking;
 }
@@ -505,8 +575,50 @@ void MovePlayer(PPCContext& ctx, uint8_t* base, uint32_t fighter)
 {
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
+    if (!g_controls.freeMovement) depth=g_controls.depthMotion;
     const float step = horizontal && depth ? kWalkStep * 0.70710678f : kWalkStep;
-    MoveOnFloor(ctx, base, fighter, horizontal * step, depth * step);
+    if (g_controls.freeMovement || !g_target)
+    {
+        MoveOnFloor(ctx,base,fighter,horizontal*step,depth*step);
+        return;
+    }
+    const float tx=ReadFloat(base,g_target), tz=ReadFloat(base,g_target+8);
+    const float dx=tx-ReadFloat(base,fighter), dz=tz-ReadFloat(base,fighter+8);
+    const float radius=std::hypot(dx,dz);
+    if (radius<1.0f || (!horizontal && !depth)) return;
+    const float along=dx*g_camera.rightX+dz*g_camera.rightZ;
+    const float side=std::abs(along)<50.0f ? (GRead32(base,fighter+1024)?-1.0f:1.0f) :
+        (along>0.0f?1.0f:-1.0f);
+    const float nextRadius=std::max(50.0f,radius-horizontal*side*step);
+    const float angle=-depth*side*step/radius;
+    const float px=-dx/radius*nextRadius, pz=-dz/radius*nextRadius;
+    SetFloorPosition(ctx,base,fighter,tx+px*std::cos(angle)-pz*std::sin(angle),
+        tz+px*std::sin(angle)+pz*std::cos(angle));
+}
+
+void SeparateEnemies(PPCContext& ctx, uint8_t* base, const std::array<uint32_t, kMaxEnemies>& enemies)
+{
+    constexpr float spacing = 1100.0f;
+    for (unsigned i = 0; i < enemies.size(); ++i)
+        for (unsigned j = i + 1; j < enemies.size(); ++j)
+        {
+            const uint32_t a = enemies[i], b = enemies[j];
+            if (!a || !b || Defeated(base,a) || Defeated(base,b) ||
+                !GRead32(base,a+kOnStage) || !GRead32(base,b+kOnStage) ||
+                g_enemies[i].entering || g_enemies[j].entering) continue;
+            float dx = ReadFloat(base,b)-ReadFloat(base,a), dz = ReadFloat(base,b+8)-ReadFloat(base,a+8);
+            float distance = std::hypot(dx,dz);
+            if (distance >= spacing) continue;
+            if (distance < 1.0f) { dx = g_camera.rightX; dz = g_camera.rightZ; distance = 1.0f; }
+            const bool moveA = int(i) != g_attackOwner && CanWalk(base,a);
+            const bool moveB = int(j) != g_attackOwner && CanWalk(base,b);
+            const unsigned movable = unsigned(moveA) + unsigned(moveB);
+            if (!movable) continue;
+            const float step = std::min(24.0f,(spacing-distance)/float(movable));
+            dx *= step/distance; dz *= step/distance;
+            if (moveA) SetFloorPosition(ctx,base,a,ReadFloat(base,a)-dx,ReadFloat(base,a+8)-dz);
+            if (moveB) SetFloorPosition(ctx,base,b,ReadFloat(base,b)+dx,ReadFloat(base,b+8)+dz);
+        }
 }
 
 void ScheduleAttack(uint8_t* base, uint32_t player, const std::array<uint32_t, kMaxEnemies>& enemies)
@@ -522,6 +634,7 @@ void ScheduleAttack(uint8_t* base, uint32_t player, const std::array<uint32_t, k
         const bool stalled = ++g_turnFrames > 300 && CanWalk(base, owner);
         if (!(interrupted || finished || stalled)) return;
         g_enemies[g_attackOwner].strikePending = false;
+        g_enemies[g_attackOwner].disengageFrames = 90;
         g_nextAttacker = (unsigned(g_attackOwner) + 1) % kMaxEnemies;
         g_attackOwner = -1;
         g_attackPause = 24;
@@ -540,6 +653,7 @@ void ScheduleAttack(uint8_t* base, uint32_t player, const std::array<uint32_t, k
         g_turnFrames = 0;
         g_enemies[i].phase = EnemyPhase::Approach;
         g_enemies[i].framesLeft = 0;
+        g_enemies[i].disengageFrames = 0;
         break;
     }
 }
@@ -549,7 +663,12 @@ void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player
 {
     controller.walking = false;
     if (!controller.entryLife) controller.entryLife = GRead32(base, enemy + kLife);
-    if (GRead32(base, enemy + kLife) < controller.entryLife) controller.entering = false;
+    if (GRead32(base, enemy + kLife) < controller.entryLife)
+    {
+        controller.entering = false;
+    }
+    if (GRead32(base,enemy+kLife) < controller.lastLife) controller.disengageFrames = 0;
+    controller.lastLife = GRead32(base,enemy+kLife);
     const bool defeated = Defeated(base, enemy);
     if (g_fullRoster && defeated && GRead32(base, enemy + kOnStage))
     {
@@ -613,24 +732,47 @@ void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player
     float forward, across;
     if (ownsTurn || controller.entering)
     {
-        if (ownsTurn && std::abs(along) <= kEnemyStrikeRange && std::abs(depth) <= kEnemyAlignDepth)
+        if (ownsTurn && range <= kEnemyStrikeRange)
         {
             controller.phase = EnemyPhase::Windup;
             controller.framesLeft = kEnemyWindup;
             return;
         }
-        forward = along - std::clamp(along, -kEnemyApproachGap, kEnemyApproachGap);
-        across = depth;
+        const float approach = std::max(0.0f,range-kEnemyApproachGap)/std::max(1.0f,range);
+        forward = along * approach;
+        across = depth * approach;
     }
     else
     {
         // Follow a retreating player, but hold when close so waiting enemies do
         // not continually back away from the player's attacks.
-        if (range < 1500.0f) return;
-        const float waitAlong = index % 2 == 0 ? -1100.0f : 1100.0f;
-        const float waitDepth = index < 2 ? -700.0f : 700.0f;
+        if (range > 1550.0f) controller.disengageFrames = 0;
+        if (controller.disengageFrames) --controller.disengageFrames;
+        if (range < 900.0f && !controller.disengageFrames) return;
+        // Stagger the screen columns as well as the floor quadrants, so the
+        // waiting fighters do not form two overlapping silhouettes.
+        constexpr float alongSlots[] = {-1900.0f,1900.0f,-800.0f,800.0f};
+        constexpr float depthSlots[] = {-800.0f,800.0f,1900.0f,-1900.0f};
+        const float waitAlong = alongSlots[index];
+        const float waitDepth = depthSlots[index];
         forward = along + waitAlong;
         across = depth + waitDepth;
+        // Orbit toward a free quadrant instead of crossing through the player.
+        const float currentAngle = std::atan2(-along,-depth);
+        const float goalAngle = std::atan2(waitAlong,waitDepth);
+        const float turn = std::remainder(goalAngle-currentAngle,2.0f*std::numbers::pi_v<float>);
+        if (controller.disengageFrames && range < 1550.0f)
+        {
+            forward = -along;
+            across = -depth;
+        }
+        else if (range < 2600.0f && std::abs(turn) > .25f)
+        {
+            const float direction = turn > 0.0f ? 1.0f : -1.0f;
+            const float radial = std::clamp(2060.0f-range,-180.0f,180.0f);
+            forward = (-depth/range)*direction*650.0f + (-along/range)*radial;
+            across = (along/range)*direction*650.0f + (-depth/range)*radial;
+        }
     }
     const float distance = std::hypot(forward, across);
     if (distance < 35.0f) return;
@@ -661,22 +803,34 @@ void PrepareCamera(uint8_t* base, uint32_t camera, uint32_t player, uint32_t dum
     g_camera.target = { x0, floorY + 850.0f, z0 };
     g_camera.eye = { x0 + fx * distance, g_camera.target[1] + rise, z0 + fz * distance };
     g_camera.up = { 0.0f, 1.0f, 0.0f };
+    for (unsigned i = 0; i < g_camera.lens.size(); ++i)
+        g_camera.lens[i] = GRead32(base, camera + 64 + i * 4);
+    for (unsigned i = 0; i < g_camera.projection.size(); ++i)
+        g_camera.projection[i] = GRead32(base, camera + kProjectionOffset + i * 4);
     g_camera.ready = true;
 }
 
-void ApplyCameraPose(uint8_t* base, uint32_t camera)
+void UpdateCameraFollow(uint8_t* base)
 {
     const uint32_t player = PlayerFighter(base);
     if (player)
     {
         const float x = ReadFloat(base, player), z = ReadFloat(base, player + 8);
         // Follow arena travel without changing the stage-relative movement axes.
-        const float dx = x - g_camera.followX, dz = z - g_camera.followZ;
-        g_camera.followX = x;
-        g_camera.followZ = z;
+        const float dx = (x - g_camera.followX) * 0.20f, dz = (z - g_camera.followZ) * 0.20f;
+        g_camera.followX += dx;
+        g_camera.followZ += dz;
         g_camera.eye[0] += dx; g_camera.eye[2] += dz;
         g_camera.target[0] += dx; g_camera.target[2] += dz;
     }
+}
+
+void ApplyCameraPose(uint8_t* base, uint32_t camera)
+{
+    for (unsigned i = 0; i < g_camera.lens.size(); ++i)
+        GWrite32(base, camera + 64 + i * 4, g_camera.lens[i]);
+    for (unsigned i = 0; i < g_camera.projection.size(); ++i)
+        GWrite32(base, camera + kProjectionOffset + i * 4, g_camera.projection[i]);
     for (unsigned i = 0; i < 3; ++i)
     {
         WriteFloat(base, camera + 0x10 + 4 * i, g_camera.eye[i]);
@@ -975,7 +1129,6 @@ PPC_FUNC(sub_82320AC8)
         if (player && enemies[0])
         {
             ReconcileWalk(ctx, base, player, g_motion[0]);
-            if (!Defeated(base, player) && CanWalk(base, player)) MovePlayer(ctx, base, player);
             if (g_spawnPartner && enemies[1])
             {
                 const float offsetX = ReadFloat(base, player) - g_camera.centerX;
@@ -999,6 +1152,9 @@ PPC_FUNC(sub_82320AC8)
                 }
                 g_spawnPartner = false;
             }
+            UpdateTarget(base, player);
+            if (!Defeated(base,player) && CanWalk(base,player)) MovePlayer(ctx,base,player);
+            UpdateCameraFollow(base);
             ScheduleAttack(base, player, enemies);
             for (unsigned i = 0; i < enemies.size(); ++i)
             {
@@ -1016,6 +1172,21 @@ PPC_FUNC(sub_82320AC8)
                 g_entryMotion[i] = {};
                 if (g_enemies[i].entering)
                     g_entryMotion[i] = {enemy, ReadFloat(base, enemy), ReadFloat(base, enemy + 8), true};
+            }
+            SeparateEnemies(ctx,base,enemies);
+            const uint32_t actors[] = {player,enemies[0],enemies[1],enemies[2],enemies[3]};
+            int horizontal, depth;
+            TekkenForceReadMoveAxes(horizontal,depth);
+            if (!g_controls.freeMovement) depth=g_controls.depthMotion;
+            for (unsigned i=0;i<g_walkMotion.size();++i)
+            {
+                const uint32_t actor=actors[i];
+                g_walkMotion[i]={};
+                if (!actor || Defeated(base,actor) || !CanWalk(base,actor)) continue;
+                const bool moving=i ? g_enemies[i-1].walking : horizontal || depth;
+                if (moving || NativeWalk(base,actor))
+                    g_walkMotion[i]={actor,ReadFloat(base,actor),ReadFloat(base,actor+8),true,
+                        GRead32(base,actor+kLife)};
             }
         }
     }
@@ -1036,6 +1207,13 @@ PPC_FUNC(sub_822CDA88)
     {
         const uint32_t fighter = actors[i];
         if (!fighter) continue;
+        if (g_walkMotion[i].fighter == fighter && g_walkMotion[i].walking &&
+            GRead32(base,fighter+kLife) == g_walkMotion[i].life && CanWalk(base,fighter))
+        {
+            // Arena steering owns walk displacement; the native cycle owns
+            // the pose. Keep native attack lunges and hit/guard knockback.
+            SetFloorPosition(ctx,base,fighter,g_walkMotion[i].x,g_walkMotion[i].z);
+        }
         if (i && g_entryMotion[i - 1].fighter == fighter && g_entryMotion[i - 1].walking &&
             GRead32(base, fighter + kLife) == g_enemies[i - 1].entryLife && !Defeated(base, fighter))
         {
@@ -1046,6 +1224,7 @@ PPC_FUNC(sub_822CDA88)
         g_motion[i].fighter = fighter;
         g_motion[i].x = ReadFloat(base, fighter);
         g_motion[i].z = ReadFloat(base, fighter + 8);
+        g_motion[i].life = GRead32(base,fighter+kLife);
     }
 }
 
@@ -1159,6 +1338,33 @@ PPC_FUNC(sub_82545EE0)
     __imp__sub_82545EE0(ctx, base);
 }
 
+// Several native paths build the render view directly, bypassing sub_82545EE0.
+// Apply the same pose to every publication, not just the main camera update.
+PPC_FUNC(sub_82541C90)
+{
+    if (InPractice(base) && g_camera.ready && ctx.r3.u32 == RenderCamera(base) + 16)
+        ApplyCameraPose(base, ctx.r3.u32 - 16);
+    __imp__sub_82541C90(ctx, base);
+}
+
+PPC_FUNC(sub_82542D18)
+{
+    const uint32_t fighter = ctx.r3.u32;
+    if (InPractice(base) && g_camera.ready &&
+        (fighter == PlayerFighter(base) || IsEnemy(base, fighter)))
+    {
+        if (fighter==PlayerFighter(base) && g_controls.freeMovement) FaceFreeMovement(base,fighter);
+        const float angle = ReadFloat(base, fighter + 184);
+        const float horizontal = std::sin(angle) * g_camera.rightX + std::cos(angle) * g_camera.rightZ;
+        const uint32_t side = std::abs(horizontal) < 0.05f ? GRead32(base, fighter + 1024) : horizontal < 0.0f;
+        GWrite32(base, fighter + 1020, side);
+        GWrite32(base, fighter + 1024, side);
+        ctx.r3.u32 = side;
+        return;
+    }
+    __imp__sub_82542D18(ctx, base);
+}
+
 void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
 {
     if (!InPractice(base) || !g_camera.ready) return;
@@ -1168,34 +1374,51 @@ void TekkenForceFighterInput(PPCContext& ctx, uint8_t* base)
     if (lr != 0x82303A1Cu && lr != 0x823038B4u && lr != 0x82303A70u) return;
     const uint32_t fighter = lr == 0x823038B4u ? ctx.r31.u32 : ctx.r26.u32;
     if (!fighter || fighter != PlayerFighter(base)) return;
+    if (lr==0x82303A1Cu) SamplePlayerControls();
     if (Defeated(base, fighter))
     {
         ctx.r3.u32 = 0;
         return;
     }
-    ctx.r3.u32 &= ~kDirectionButtons;
     if (g_fullRoster) ctx.r3.u32 &= ~kTagButton;
     if (lr != 0x82303A1Cu || !CanWalk(base, fighter)) return;
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
-    if (ctx.r3.u32 & kAttackButtons)
+    if (!g_controls.freeMovement && (ctx.r3.u32 & kAttackButtons))
     {
         const uint32_t enemy = AttackTarget(base, fighter, horizontal, depth);
         if (enemy)
         {
-            // Native attack movement also reads the fighter's opponent link.
-            // The original Practice logic treats the dummy link as a mode change.
-            if (enemy != kPracticeExtra && EnemyPartner(base)) GWrite32(base, fighter + kOpponent, enemy);
-            FaceForStrike(base, fighter, enemy);
+            if (enemy != kPracticeExtra) GWrite32(base, fighter + kOpponent, enemy);
         }
         return;
     }
-    if (horizontal) ctx.r3.u32 |= WalkDirection(float(horizontal));
-    else if (depth)
+}
+
+PPC_FUNC(sub_82303BB0)
+{
+    const uint32_t fighter = ctx.r3.u32;
+    __imp__sub_82303BB0(ctx, base);
+    if (!InPractice(base) || !g_camera.ready || fighter != PlayerFighter(base) || !CanWalk(base, fighter)) return;
+    // Native command history stays intact. A double-tap depth gesture uses
+    // walk execution; a single held vertical input retains crouch/jump.
+    if (GRead32(base, fighter + 2064) & kAttackButtons) return;
+    int horizontal, depth;
+    TekkenForceReadMoveAxes(horizontal, depth);
+    const int movementDepth=g_controls.freeMovement ? depth : g_controls.depthMotion;
+    if (!g_controls.freeMovement && depth && !movementDepth && !g_controls.nativeVerticalHold)
     {
-        const uint32_t enemy = AttackTarget(base, fighter, 0, 0);
-        ctx.r3.u32 |= WalkDirection(enemy ? AlongBetween(base, fighter, enemy) : 1.0f);
+        GWrite32(base,fighter+2048,horizontal ?
+            (1u<<(((horizontal>0)==(GRead32(base,fighter+1024)==0))?6:4)) : 32u);
+        GWrite32(base,fighter+2052,0);
+        return;
     }
+    if (!horizontal && !movementDepth) return;
+    if (!g_controls.freeMovement && g_controls.nativeVerticalHold && !movementDepth) return;
+    const bool facingRight = GRead32(base, fighter + 1024) == 0;
+    const unsigned direction = !horizontal || (horizontal > 0) == facingRight ? 6 : 4;
+    GWrite32(base, fighter + 2048, 1u << direction);
+    GWrite32(base, fighter + 2052, 0);
 }
 
 // The host overlay only hides the automated select flow. Enemy gauges use native HUD sprites.
@@ -1216,6 +1439,54 @@ void TekkenForcePublishOverlay(uint8_t* base)
     std::vector<GpuOverlayRect> rects;
     if (g_blank.load(std::memory_order_relaxed))
         rects.push_back({ 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f });
+    else if (InPractice(base) && g_camera.ready && !g_controls.freeMovement && g_target && !Defeated(base, g_target) &&
+             GRead32(base, g_target + kOnStage) && !Defeated(base, PlayerFighter(base)))
+    {
+        const auto& eye = g_camera.eye;
+        const auto& target = g_camera.target;
+        std::array<float, 3> forward{ target[0] - eye[0], target[1] - eye[1], target[2] - eye[2] };
+        const float length = std::sqrt(forward[0]*forward[0] + forward[1]*forward[1] + forward[2]*forward[2]);
+        for (float& value : forward) value /= length;
+        const float planar = std::hypot(forward[0], forward[2]);
+        const std::array<float,3> right{ -forward[2]/planar, 0.0f, forward[0]/planar };
+        const std::array<float,3> up{ -right[2]*forward[1],
+            right[2]*forward[0] - right[0]*forward[2], right[0]*forward[1] };
+        std::array<float,3> marker{ReadFloat(base,g_target),ReadFloat(base,g_target+4)+2100.0f,
+            ReadFloat(base,g_target+8)};
+        float top=ReadFloat(base,g_target+4)+500.0f;
+        for (unsigned i=0;i<14;++i)
+        {
+            const uint32_t hurt=g_target+2176+i*24;
+            const float height=ReadFloat(base,hurt+4)+ReadFloat(base,hurt+12);
+            if (std::isfinite(height) && height>top)
+            {
+                top=height;
+                marker={ReadFloat(base,hurt),height+140.0f,ReadFloat(base,hurt+8)};
+            }
+        }
+        const std::array<float,3> delta{marker[0]-eye[0],marker[1]-eye[1],marker[2]-eye[2]};
+        const auto dot = [&](const auto& axis) {
+            return delta[0]*axis[0]+delta[1]*axis[1]+delta[2]*axis[2];
+        };
+        const float depth = dot(forward);
+        if (depth > 100.0f)
+        {
+            const float x = 0.5f + 0.5f * std::bit_cast<float>(g_camera.projection[0]) * dot(right) / depth;
+            const float y = 0.5f - 0.5f * std::bit_cast<float>(g_camera.projection[5]) * dot(up) / depth;
+            if (x > 0.025f && x < 0.975f && y > 0.13f && y < 0.90f)
+            {
+                rects.push_back({x-.0045f,y-.017f,.009f,.018f,.03f,.03f,.03f});
+                rects.push_back({x-.0027f,y-.015f,.0054f,.017f,1.0f,.82f,.06f});
+                for (int row=0; row<10; ++row)
+                {
+                    const float width = .024f * (1.0f-float(row)/10.0f);
+                    rects.push_back({x-width*.5f,y+row*.0018f,width,.002f,.03f,.03f,.03f});
+                    if (row<8)
+                        rects.push_back({x-width*.5f+.002f,y+row*.0018f,width-.004f,.0018f,1.0f,.82f,.06f});
+                }
+            }
+        }
+    }
     if (rects.empty() && !published) return;
     published = !rects.empty();
     GpuSetOverlayRects(rects.data(), unsigned(rects.size()));
@@ -1291,6 +1562,26 @@ PPC_FUNC(sub_823D4690)
 
 PPC_FUNC(sub_822CBD80)
 {
+    if (InPractice(base) && g_camera.ready && ctx.r3.u32==PlayerFighter(base) && g_controls.freeMovement)
+    {
+        const uint32_t player=ctx.r3.u32, saved=GRead32(base,player+kOpponent);
+        FaceFreeMovement(base,player);
+        GWrite32(base,player+kOpponent,0);
+        ctx.r4.u32=0;
+        __imp__sub_822CBD80(ctx,base);
+        GWrite32(base,player+kOpponent,saved);
+        return;
+    }
+    if (InPractice(base) && g_camera.ready && ctx.r3.u32 == PlayerFighter(base) &&
+        g_target && !Defeated(base, g_target))
+    {
+        const uint32_t player = ctx.r3.u32, saved = GRead32(base, player + kOpponent);
+        GWrite32(base, player + kOpponent, g_target);
+        if (CanWalk(base, player)) FaceForStrike(base, player, g_target);
+        __imp__sub_822CBD80(ctx, base);
+        GWrite32(base, player + kOpponent, saved);
+        return;
+    }
     if (InPractice(base) && g_camera.ready && IsEnemy(base, ctx.r3.u32))
     {
         const uint32_t player = PlayerFighter(base);
@@ -1301,11 +1592,139 @@ PPC_FUNC(sub_822CBD80)
     __imp__sub_822CBD80(ctx, base);
 }
 
+uint16_t TekkenForceFilterPadButtons(uint8_t* base, uint16_t buttons, int16_t x, int16_t y)
+{
+    if (!InPractice(base) || !g_camera.ready) return buttons;
+    buttons &= ~uint16_t(0x0200u);
+    if (buttons & 0x0020u) return buttons; // Back + A remains the native reset chord.
+    constexpr int deadzone=7849; // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, as arena movement uses.
+    const bool left=(buttons&4u)||x < -deadzone, right=(buttons&8u)||x > deadzone;
+    const bool up=(buttons&1u)||y > deadzone, down=(buttons&2u)||y < -deadzone;
+    buttons &= ~uint16_t(0x000Fu);
+    if (left != right) buttons |= left ? 4u : 8u;
+    if (up != down) buttons |= up ? 1u : 2u;
+    return buttons;
+}
+
+// Canonicalize one melee pair only while the native capsule test runs. Keep
+// radial reach, vertical hit levels, hit frames and native damage unchanged.
+// No render pose or actor position escapes the temporary query.
+PPC_FUNC(sub_822CB9F0)
+{
+    const uint32_t attacker=ctx.r3.u32, defender=ctx.r4.u32, output=ctx.r5.u32;
+    const uint32_t count=ctx.r6.u32, shapes=ctx.r7.u32;
+    if (!EncounterPair(base,attacker,defender) || !shapes || !count || count>4)
+    {
+        __imp__sub_822CB9F0(ctx,base);
+        return;
+    }
+    const auto trace = [&](const char* path) {
+        static unsigned shown=0;
+        if (!std::getenv("TTT2_TF_DIAG") || shown++>=500) return;
+        const uint32_t player=PlayerFighter(base), enemy=attacker==player?defender:attacker;
+        const float dx=ReadFloat(base,enemy)-ReadFloat(base,player);
+        const float dz=ReadFloat(base,enemy+8)-ReadFloat(base,player+8);
+        const float angle=std::atan2(FloorDepth(dx,dz),dx*g_camera.rightX+dz*g_camera.rightZ);
+        std::fprintf(stderr,"[tf-contact] %s attacker=%08X defender=%08X angle=%.1f radius=%.1f\n",
+            path,attacker,defender,angle*180.0f/std::numbers::pi_v<float>,std::hypot(dx,dz));
+    };
+    // Preserve every hit the original 3D query already accepts. The side-view
+    // query extends angular coverage and never replaces a valid native hit.
+    PPCContext native=ctx;
+    __imp__sub_822CB9F0(native,base);
+    if (native.r3.u32)
+    {
+        trace("native");
+        ctx=native;
+        return;
+    }
+    const float ax=ReadFloat(base,attacker), az=ReadFloat(base,attacker+8);
+    const float bx=ReadFloat(base,defender), bz=ReadFloat(base,defender+8);
+    const float dx=bx-ax, dz=bz-az, radius=std::hypot(dx,dz);
+    if (radius < 1.0f || !std::isfinite(radius))
+    {
+        __imp__sub_822CB9F0(ctx,base);
+        return;
+    }
+    const auto facing = [&](uint32_t actor) {
+        const float angle=ReadFloat(base,actor+184);
+        const float dot=std::sin(angle)*g_camera.rightX+std::cos(angle)*g_camera.rightZ;
+        return std::abs(dot)<.05f ? (GRead32(base,actor+1024) ? -1.0f:1.0f) : (dot>0.0f?1.0f:-1.0f);
+    };
+    const float along=dx*g_camera.rightX+dz*g_camera.rightZ;
+    const float side=std::abs(along)<1.0f ? facing(attacker) : (along>0.0f?1.0f:-1.0f);
+    const float vx=ax+side*radius*g_camera.rightX, vz=az+side*radius*g_camera.rightZ;
+    std::array<uint8_t,96> savedAttacks{};
+    std::array<uint8_t,336> savedHurt{};
+    const uint32_t savedX=GRead32(base,defender), savedZ=GRead32(base,defender+8);
+    std::memcpy(savedAttacks.data(),base+shapes,count*24);
+    std::memcpy(savedHurt.data(),base+defender+2176,savedHurt.size());
+    const auto transform = [&](uint32_t point,uint32_t actor,float ox,float oz,float nx,float nz,float sign) {
+        const float angle=ReadFloat(base,actor+184);
+        const float fx=std::sin(angle), fz=std::cos(angle);
+        const float px=ReadFloat(base,point)-ox, pz=ReadFloat(base,point+8)-oz;
+        const float forward=px*fx+pz*fz, across=-px*fz+pz*fx;
+        WriteFloat(base,point,nx+sign*(forward*g_camera.rightX-across*g_camera.rightZ));
+        WriteFloat(base,point+8,nz+sign*(forward*g_camera.rightZ+across*g_camera.rightX));
+    };
+    for (unsigned i=0;i<count;++i)
+    {
+        transform(shapes+i*24,attacker,ax,az,ax,az,facing(attacker));
+        transform(shapes+i*24+12,attacker,ax,az,ax,az,facing(attacker));
+    }
+    // Hurt records are centers plus extents, not two endpoints. Preserve radii.
+    // Use a consistent opposing hurt pose in the side-view query. Otherwise a
+    // target leaning toward another enemy moves its body out of jab reach.
+    for (unsigned i=0;i<14;++i) transform(defender+2176+i*24,defender,bx,bz,vx,vz,-side);
+    WriteFloat(base,defender,vx); WriteFloat(base,defender+8,vz);
+    __imp__sub_822CB9F0(ctx,base);
+    std::memcpy(base+shapes,savedAttacks.data(),count*24);
+    std::memcpy(base+defender+2176,savedHurt.data(),savedHurt.size());
+    GWrite32(base,defender,savedX); GWrite32(base,defender+8,savedZ);
+    if (ctx.r3.u32 && output)
+    {
+        trace("side");
+        const float ux=dx/radius, uz=dz/radius;
+        const auto unproject = [&](uint32_t point,bool vector) {
+            const float px=ReadFloat(base,point)-(vector?0.0f:ax);
+            const float pz=ReadFloat(base,point+8)-(vector?0.0f:az);
+            const float forward=side*(px*g_camera.rightX+pz*g_camera.rightZ);
+            const float across=side*(-px*g_camera.rightZ+pz*g_camera.rightX);
+            WriteFloat(base,point,(vector?0.0f:ax)+forward*ux-across*uz);
+            WriteFloat(base,point+8,(vector?0.0f:az)+forward*uz+across*ux);
+        };
+        unproject(output,false);
+        if (!(GRead32(base,attacker+936)&0x1000u)) unproject(output+12,true);
+    }
+}
+
 PPC_FUNC(sub_82314EA0)
 {
     const uint32_t fighter = ctx.r3.u32;
     __imp__sub_82314EA0(ctx, base);
-    if (!InPractice(base) || !g_camera.ready || !IsEnemy(base, fighter)) return;
+    if (!InPractice(base) || !g_camera.ready) return;
+    if (fighter==PlayerFighter(base))
+    {
+        if (CanWalk(base,fighter) && !(TekkenForceReadButtons()&0xF000u) &&
+            (g_controls.freeMovement || !g_controls.nativeVerticalHold) && ctx.r3.u32)
+        {
+            const uint32_t name=GRead32(base,ctx.r3.u32);
+            const char* text=name?reinterpret_cast<const char*>(base+name):"";
+            if (std::strstr(text,"sYOKE") || std::strstr(text,"sJUMP") ||
+                std::strstr(text,"sSTEP") || std::strstr(text,"sWALK") ||
+                std::strstr(text,"cKAM") || std::strstr(text,"cWALK"))
+            {
+                int horizontal,depth;
+                TekkenForceReadMoveAxes(horizontal,depth);
+                if (!g_controls.freeMovement) depth=g_controls.depthMotion;
+                const uint32_t moveset=GRead32(base,fighter+136);
+                const uint32_t neutral=GRead16(base,moveset+138);
+                ctx.r3.u32=GRead32(base,moveset+416)+(neutral+((horizontal||depth)?1:0))*112;
+            }
+        }
+        return;
+    }
+    if (!IsEnemy(base,fighter)) return;
     const uint32_t table = GRead32(base, GRead32(base, fighter + 136) + 416);
     // Native running can branch into an automatic tackle/chop without an attack input.
     // Entrance animations must never bypass the arena's exclusive attack turn.

@@ -122,6 +122,11 @@ target_compile_options(community_net_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-O2
 target_link_libraries(community_net_test PRIVATE ws2_32 secur32 crypt32 bcrypt)
 target_compile_definitions(community_net_test PRIVATE _CRT_SECURE_NO_WARNINGS)
 
+add_executable(tekken_force_controls_test tools/test_tekken_force_controls.cpp)
+target_compile_options(tekken_force_controls_test PRIVATE -O2 -W4 -UNDEBUG)
+enable_testing()
+add_test(NAME tekken_force_controls COMMAND tekken_force_controls_test)
+
 # --- Version, icon -------------------------------------------------------------------------
 # One version for the game executable's VERSIONINFO, the installer and Add or remove programs.
 set(TTT2_VERSION "0.2.0")

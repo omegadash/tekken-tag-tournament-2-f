@@ -61,17 +61,29 @@ top slot for that session. Select one fighter to control. The game loads Tulip F
 four Combot opponents automatically.
 The installed TU3 palette table provides two Combot color schemes, which repeat across the group.
 
-Use the D-pad, left stick, or the default keyboard arrow keys to move along the stage and
-across the floor. Fighters use stock walk animations. Diagonals move at the same speed
-as the four main directions. The whole stage floor is available and the side camera follows
-the player across it.
+The D-pad, left stick, and default keyboard arrow keys use the same controls. While locked
+onto an enemy, left/right move forward or backward along the line between the two fighters.
+Double-tap up/down to step into the background/foreground around that enemy; hold the
+second tap to keep walking. A single held up/down retains native jump/crouch after the
+double-tap window. Fighters use stock walk animations. The whole stage floor is available and the side camera follows
+the player across it with smooth follow. The arena view is kept consistent across native
+camera publications.
 
 Enemies enter from different off-screen positions using Combot's native run animation, then
 focus on the player. One enemy at a time approaches to attack; the others wait around the
-player. Attack turns rotate after the strike and recovery, or pass on if the attacker is
+player in separate quadrants, with separation between enemies. Attack turns rotate after
+the strike and recovery, or pass on if the attacker is
 interrupted or defeated. Step across the floor during the windup to evade.
-Player attacks favor nearby opponents at a similar floor depth. Hold a
-direction as you press attack to favor an opponent in that direction. With Jun, try
+Tap **RB** to cycle the living enemy targets. A gold arrow above the selected enemy marks
+the target; a new living target is selected after its defeat. Hold **RB** for 300 ms to release
+targeting and move freely in eight directions. Free movement remains active after releasing
+RB; tap it again to lock the nearest living enemy. Attacks face the selected target.
+The left stick and D-pad retain native directional command
+history. Directional attacks and command sequences use the fighter's left/right facing,
+including when the fighter faces diagonally. Directions with attack buttons retain their
+native move commands immediately. Melee checks keep native hit timing,
+height and reach, with a side-view query extending coverage around the target.
+With Jun, try
 **X** for a jab and **A + B** for a knockdown on an Xbox controller. The default keyboard
 equivalents are **Z** and **A + S**. **A** also performs a wake-up kick when your fighter has
 landed after a knockdown. The player's life bar is at the top. Each Combot has its own smaller
@@ -96,3 +108,7 @@ The encounter starts with **Position Settings → Battle Position → Default Po
 Hold **Back/View** and tap **A** on an Xbox controller to reset all fighters. With the stock
 keyboard bindings, hold **Backspace** and tap the letter **A**. The game shows **Back + A Position**
 at the lower left when reset is available. Launch without `--tekken-force` for the regular main menu.
+
+The host gesture state can be tested without game assets by building the
+`tekken_force_controls_test` target and running `ctest -R tekken_force_controls --output-on-failure`
+from the build directory.

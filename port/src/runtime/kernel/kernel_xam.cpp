@@ -1250,6 +1250,15 @@ void TekkenForceReadMoveAxes(int& horizontal, int& depth)
     depth = down - up;
 }
 
+uint16_t TekkenForceReadButtons()
+{
+    if (!g_pads[0].connected.load()) return 0;
+    std::lock_guard lock(g_pads[0].m);
+    return g_pads[0].state.Gamepad.wButtons;
+}
+
+uint16_t TekkenForceFilterPadButtons(uint8_t* base, uint16_t buttons, int16_t x, int16_t y);
+
 PPC_FUNC(__imp__XamInputGetCapabilities)
 {
     KTrace("XamInputGetCapabilities");
@@ -1297,6 +1306,8 @@ PPC_FUNC(__imp__XamInputGetState)
         std::lock_guard lk(g_pads[user].m);
         st = g_pads[user].state;
     }
+    if (user == 0) st.Gamepad.wButtons = TekkenForceFilterPadButtons(base,st.Gamepad.wButtons,
+        st.Gamepad.sThumbLX,st.Gamepad.sThumbLY);
     if (SysUiOwnsInput())
         st.Gamepad = XINPUT_GAMEPAD{};          // a system screen has the controller
     else if (SysUiTitleWantsProfile())
