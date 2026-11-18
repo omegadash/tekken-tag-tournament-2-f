@@ -126,6 +126,9 @@ add_executable(tekken_force_controls_test tools/test_tekken_force_controls.cpp)
 target_compile_options(tekken_force_controls_test PRIVATE -O2 -W4 -UNDEBUG)
 enable_testing()
 add_test(NAME tekken_force_controls COMMAND tekken_force_controls_test)
+add_executable(tekken_force_camera_test tools/test_tekken_force_camera.cpp)
+target_compile_options(tekken_force_camera_test PRIVATE -O2 -W4 -UNDEBUG)
+add_test(NAME tekken_force_camera COMMAND tekken_force_camera_test)
 
 # --- Version, icon -------------------------------------------------------------------------
 # One version for the game executable's VERSIONINFO, the installer and Add or remove programs.

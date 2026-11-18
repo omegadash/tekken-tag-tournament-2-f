@@ -66,7 +66,9 @@ onto an enemy, left/right move forward or backward along the line between the tw
 Double-tap up/down to step into the background/foreground around that enemy; hold the
 second tap to keep walking. A single held up/down retains native jump/crouch after the
 double-tap window. Fighters use stock walk animations. The whole stage floor is available and the side camera follows
-the player across it with smooth follow. The arena view is kept consistent across native
+the player's arena walking horizontally with a central dead zone. Native attack/target
+root corrections and depth travel do not drive follow. Horizontal follow commits after
+the native pose update and is limited to 24 mm per battle tick. The arena view is kept consistent across native
 camera publications.
 
 Enemies enter from different off-screen positions using Combot's native run animation, then
@@ -119,9 +121,15 @@ Launch a development session with `TTT2_TF_CAMERA=stationary` to disable follow 
 freeze the native view, projection and combined matrix at the initial arena view.
 This diagnostic keeps the camera fixed through movement, combat, targeting and reset.
 Restart the process to leave the diagnostic or change its initial framing.
+`TTT2_TF_CAMERA=legacy` retains the previous two-axis raw-root follow for controlled
+comparison. Leave this variable unset for the corrected horizontal follow.
 
-Optional `TTT2_TF_CAMERA_TRACE=<absolute JSONL path>` records the root/pose position
-sampled by follow, final native camera publications, and the actual c8-c11 vertex
+Optional `TTT2_TF_CAMERA_TRACE=<absolute JSONL path>` records raw root/pose positions
+for follow-timing correlation, final native camera publications, and the actual c8-c11 vertex
 constants consumed by each distinct draw matrix/shader per rendered frame. It does
 not replace renderer constants. Trace files and captures are local diagnostics and
 must not be committed. Ordinary launches leave both environment variables unset.
+
+The Milestone 9 camera isolation and acceptance evidence is recorded in
+[the camera diagnosis notes](port/tools/tekken_force_camera_notes.md). Targeting/movement
+comparison changes are a separate step after the owner's camera playtest.

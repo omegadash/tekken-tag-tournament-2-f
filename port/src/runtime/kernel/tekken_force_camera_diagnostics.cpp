@@ -47,6 +47,11 @@ bool TekkenForceCameraTraceEnabled()
     static const bool enabled=[] {const char* p=std::getenv("TTT2_TF_CAMERA_TRACE");return p && *p;}();
     return enabled;
 }
+bool TekkenForceLegacyCamera()
+{
+    static const bool legacy=[] {const char* p=std::getenv("TTT2_TF_CAMERA");return p && std::strcmp(p,"legacy")==0;}();
+    return legacy;
+}
 void TekkenForceTraceCamera(const char* phase,uint8_t* base,uint32_t camera,
     uint32_t player,uint64_t tick,const float* eye,const float* target)
 {
