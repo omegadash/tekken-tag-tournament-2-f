@@ -112,3 +112,16 @@ at the lower left when reset is available. Launch without `--tekken-force` for t
 The host gesture state can be tested without game assets by building the
 `tekken_force_controls_test` target and running `ctest -R tekken_force_controls --output-on-failure`
 from the build directory.
+
+### Camera diagnosis
+
+Launch a development session with `TTT2_TF_CAMERA=stationary` to disable follow and
+freeze the native view, projection and combined matrix at the initial arena view.
+This diagnostic keeps the camera fixed through movement, combat, targeting and reset.
+Restart the process to leave the diagnostic or change its initial framing.
+
+Optional `TTT2_TF_CAMERA_TRACE=<absolute JSONL path>` records the root/pose position
+sampled by follow, final native camera publications, and the actual c8-c11 vertex
+constants consumed by each distinct draw matrix/shader per rendered frame. It does
+not replace renderer constants. Trace files and captures are local diagnostics and
+must not be committed. Ordinary launches leave both environment variables unset.

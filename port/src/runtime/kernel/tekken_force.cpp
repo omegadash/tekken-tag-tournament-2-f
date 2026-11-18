@@ -2,6 +2,7 @@
 #include "gpu_render.h"
 #include "tekken_force_settings.h"
 #include "tekken_force_controls.h"
+#include "tekken_force_camera_diagnostics.h"
 #include <algorithm>
 #include <vector>
 #include <atomic>
@@ -143,9 +144,12 @@ struct FixedCamera
     float followX = 0.0f, followZ = 0.0f;
     std::array<uint32_t, 8> lens{};
     std::array<uint32_t, 16> projection{};
+    std::array<uint32_t, 16> stationaryView{}, stationaryProjection{}, stationaryVp{};
+    bool stationaryReady = false;
 };
 
 FixedCamera g_camera;
+uint64_t g_cameraTick = 0;
 
 enum class EnemyPhase { Approach, Windup, Recover };
 
@@ -812,6 +816,7 @@ void PrepareCamera(uint8_t* base, uint32_t camera, uint32_t player, uint32_t dum
 
 void UpdateCameraFollow(uint8_t* base)
 {
+    if (TekkenForceStationaryCamera()) return;
     const uint32_t player = PlayerFighter(base);
     if (player)
     {
@@ -1119,6 +1124,7 @@ PPC_FUNC(sub_822E31C8)
 // Resolve custom movement before the guest prepares this frame's hit volumes.
 PPC_FUNC(sub_82320AC8)
 {
+    ++g_cameraTick;
     TekkenForcePublishOverlay(base);
     if (InPractice(base) && g_camera.ready)
     {
@@ -1154,6 +1160,8 @@ PPC_FUNC(sub_82320AC8)
             }
             UpdateTarget(base, player);
             if (!Defeated(base,player) && CanWalk(base,player)) MovePlayer(ctx,base,player);
+            TekkenForceTraceCamera("follow-input",base,RenderCamera(base),player,g_cameraTick,
+                g_camera.eye.data(),g_camera.target.data());
             UpdateCameraFollow(base);
             ScheduleAttack(base, player, enemies);
             for (unsigned i = 0; i < enemies.size(); ++i)
@@ -1342,9 +1350,32 @@ PPC_FUNC(sub_82545EE0)
 // Apply the same pose to every publication, not just the main camera update.
 PPC_FUNC(sub_82541C90)
 {
-    if (InPractice(base) && g_camera.ready && ctx.r3.u32 == RenderCamera(base) + 16)
+    const bool arena=InPractice(base) && g_camera.ready && ctx.r3.u32 == RenderCamera(base)+16;
+    const uint32_t projection=ctx.r4.u32,view=ctx.r5.u32,vp=ctx.r6.u32;
+    if (arena)
         ApplyCameraPose(base, ctx.r3.u32 - 16);
     __imp__sub_82541C90(ctx, base);
+    if (arena)
+    {
+        if(TekkenForceStationaryCamera())
+        {
+            for(unsigned i=0;i<16;++i)
+            {
+                if(!g_camera.stationaryReady)
+                {
+                    g_camera.stationaryView[i]=GRead32(base,view+i*4);
+                    g_camera.stationaryProjection[i]=GRead32(base,projection+i*4);
+                    g_camera.stationaryVp[i]=GRead32(base,vp+i*4);
+                }
+                GWrite32(base,view+i*4,g_camera.stationaryView[i]);
+                GWrite32(base,projection+i*4,g_camera.stationaryProjection[i]);
+                GWrite32(base,vp+i*4,g_camera.stationaryVp[i]);
+            }
+            g_camera.stationaryReady=true;
+        }
+        TekkenForceTraceCamera("publish",base,RenderCamera(base),PlayerFighter(base),g_cameraTick,
+            g_camera.eye.data(),g_camera.target.data());
+    }
 }
 
 PPC_FUNC(sub_82542D18)

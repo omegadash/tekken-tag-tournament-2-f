@@ -7,6 +7,7 @@
 // surface the present path shows.
 #include "kernel_shared.h"
 #include "gpu_render.h"
+#include "tekken_force_camera_diagnostics.h"
 namespace frame_overlap { void NoteRead(int kind, uint32_t addr, uint32_t bytes); }   // frame_overlap.cpp
 bool PoisonOn();                                                                              // TEST ONLY (p_diag35)
 void PoisonScan(const char* kind, uint32_t addr, uint32_t bytes, uint64_t a, uint64_t b);     // kernel_memory.cpp
@@ -1770,6 +1771,11 @@ static void ReadIndicesSse41(const uint8_t* src, uint32_t n, bool index32, bool 
 bool GpuExecuteDraw(const uint32_t* regs, uint32_t initiator, uint32_t indexAddr,
                     bool index32, const GpuShader& vsRef, const GpuShader& psRef)
 {
+    if(TekkenForceCameraTraceEnabled() && GRead32(g_base,0x82EAC03Cu)==21)
+    {
+        extern std::atomic<uint64_t> g_cpPresents;
+        TekkenForceTraceDraw(regs,vsRef.addr,g_cpPresents.load(std::memory_order_relaxed)+1);
+    }
 #if defined(TTT2_DRAW_CAPTURE_DIAGNOSTICS)
     Ttt2CaptureD3D11Draw(regs, initiator, indexAddr, index32, vsRef, psRef);
 #endif
