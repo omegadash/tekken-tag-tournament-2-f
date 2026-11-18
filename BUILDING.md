@@ -65,10 +65,15 @@ The D-pad, left stick, and default keyboard arrow keys use the same controls. Wh
 onto an enemy, left/right move forward or backward along the line between the two fighters.
 Double-tap up/down to step into the background/foreground around that enemy; hold the
 second tap to keep walking. A single held up/down retains native jump/crouch after the
-double-tap window. Fighters use stock walk animations. The whole stage floor is available and the side camera follows
-the player's arena walking horizontally with a central dead zone. Native attack/target
-root corrections and depth travel do not drive follow. Horizontal follow commits after
-the native pose update and is limited to 24 mm per battle tick. The arena view is kept consistent across native
+double-tap window. Fighters use stock walk animations. Along-stage travel remains available;
+foreground/background walking uses a 1.8 m band around the native Tulip starting floor.
+The closer, steeper fixed view keeps depth travel from shrinking combat into the background.
+The side camera follows
+the player horizontally with a central dead zone. Arena walking and settled combat
+movement drive tracking; one-frame native root spikes and depth travel do not.
+Horizontal follow commits after
+the native pose update, with a 700 mm half-width dead zone, acceleration easing and a
+48 mm per battle tick speed limit. The arena view is kept consistent across native
 camera publications.
 
 Enemies enter from different off-screen positions using Combot's native run animation, then
@@ -100,7 +105,7 @@ The mode creates **tekken-force.ini beside the executable** on first use:
 PullbackPercent=50
 ~~~
 
-This adds 50% to the previous camera's eye-to-target distance. Use 0 for that distance,
+This adds 50% to the mode's base camera eye-to-target distance. Use 0 for that distance,
 100 for twice the distance, or any percentage from 0 through 200. Invalid values use 50;
 numeric values outside the range are clamped. Edit the file and reset the encounter to
 apply it without rebuilding. The camera follows the player at every setting. A development
@@ -133,3 +138,5 @@ must not be committed. Ordinary launches leave both environment variables unset.
 The Milestone 9 camera isolation and acceptance evidence is recorded in
 [the camera diagnosis notes](port/tools/tekken_force_camera_notes.md). Targeting/movement
 comparison changes are a separate step after the owner's camera playtest.
+The subsequent bounded-depth visibility pass is documented in
+[the visibility notes](port/tools/tekken_force_visibility_notes.md).

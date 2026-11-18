@@ -4,6 +4,7 @@
 #include "tekken_force_controls.h"
 #include "tekken_force_camera_diagnostics.h"
 #include "tekken_force_camera_follow.h"
+#include "tekken_force_arena.h"
 #include <algorithm>
 #include <vector>
 #include <atomic>
@@ -149,10 +150,12 @@ struct FixedCamera
     bool stationaryReady = false;
     tekken_force::HorizontalCameraFollow horizontal;
     float initialAlong = 0.0f;
+    float floorY = 0.0f;
 };
 
 FixedCamera g_camera;
 uint64_t g_cameraTick = 0;
+unsigned g_cameraCombatFrames = 0;
 
 enum class EnemyPhase { Approach, Windup, Recover };
 
@@ -311,6 +314,9 @@ void ResetControllers(uint8_t* base)
         for (unsigned i = 0; i < 3; ++i)
             g_camera.eye[i] = g_camera.target[i] +
                 (g_camera.eye[i] - g_camera.target[i]) * g_camera.pullback / previousPullback;
+        const float aimY=g_camera.floorY+tekken_force::kCameraAimHeight*g_camera.pullback;
+        g_camera.eye[1]+=aimY-g_camera.target[1];
+        g_camera.target[1]=aimY;
         if (!TekkenForceLegacyCamera() && !TekkenForceStationaryCamera())
         {
             const float delta=g_camera.initialAlong-g_camera.horizontal.center;
@@ -324,6 +330,7 @@ void ResetControllers(uint8_t* base)
     g_motion = {};
     g_entryMotion = {};
     g_walkMotion = {};
+    g_cameraCombatFrames = 0;
 }
 
 bool Defeated(uint8_t* base, uint32_t fighter)
@@ -519,6 +526,8 @@ void UpdateTarget(uint8_t* base, uint32_t player)
 
 void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x, float z)
 {
+    if (InPractice(base) && g_camera.ready && (fighter==PlayerFighter(base) || IsEnemy(base,fighter)))
+        tekken_force::ClampArenaDepth(x,z,g_camera.centerX,g_camera.centerZ,g_camera.rightX,g_camera.rightZ);
     // Keep the logical position and the pose origin used by the hit volumes in sync.
     PPCContext query = ctx;
     query.r3.u32 = fighter;
@@ -533,6 +542,15 @@ void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x,
         WriteFloat(base, pose + 48, x);
         WriteFloat(base, pose + 56, z);
     }
+}
+
+void ConstrainArenaDepth(PPCContext& ctx,uint8_t* base,uint32_t fighter)
+{
+    const float x=ReadFloat(base,fighter),z=ReadFloat(base,fighter+8);
+    float nextX=x,nextZ=z;
+    tekken_force::ClampArenaDepth(nextX,nextZ,g_camera.centerX,g_camera.centerZ,g_camera.rightX,g_camera.rightZ);
+    if (std::abs(nextX-x)>.001f || std::abs(nextZ-z)>.001f)
+        SetFloorPosition(ctx,base,fighter,nextX,nextZ);
 }
 
 void ActivateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player, float along, float depth)
@@ -821,9 +839,11 @@ void PrepareCamera(uint8_t* base, uint32_t camera, uint32_t player, uint32_t dum
     g_camera.initialAlong=x0*g_camera.rightX+z0*g_camera.rightZ;
     g_camera.horizontal.Reset(g_camera.initialAlong);
     const float floorY = (ReadFloat(base, player + 4) + ReadFloat(base, dummy + 4)) * 0.5f;
+    g_camera.floorY=floorY;
     const float fx = -g_camera.rightZ, fz = g_camera.rightX;
-    const float distance = 6200.0f * g_camera.pullback, rise = 1300.0f * g_camera.pullback;
-    g_camera.target = { x0, floorY + 850.0f, z0 };
+    const float distance = tekken_force::kCameraBaseDistance * g_camera.pullback;
+    const float rise = tekken_force::kCameraBaseRise * g_camera.pullback;
+    g_camera.target = { x0, floorY + tekken_force::kCameraAimHeight*g_camera.pullback, z0 };
     g_camera.eye = { x0 + fx * distance, g_camera.target[1] + rise, z0 + fz * distance };
     g_camera.up = { 0.0f, 1.0f, 0.0f };
     for (unsigned i = 0; i < g_camera.lens.size(); ++i)
@@ -930,6 +950,9 @@ PPC_FUNC(sub_824D0D58)
         if (player && ctx.r3.u32 == player + kLife - 4)
         {
             ResetControllers(base);
+            if (g_camera.ready)
+                TekkenForceTraceCamera("position-reset",base,RenderCamera(base),player,g_cameraTick,
+                    g_camera.eye.data(),g_camera.target.data());
         }
     }
     __imp__sub_824D0D58(ctx, base);
@@ -1162,6 +1185,7 @@ PPC_FUNC(sub_82320AC8)
         if (player && enemies[0])
         {
             ReconcileWalk(ctx, base, player, g_motion[0]);
+            ConstrainArenaDepth(ctx,base,player);
             if (g_spawnPartner && enemies[1])
             {
                 const float offsetX = ReadFloat(base, player) - g_camera.centerX;
@@ -1170,7 +1194,7 @@ PPC_FUNC(sub_82320AC8)
                 const float originDepth = FloorDepth(offsetX, offsetZ);
                 const uint32_t camera = RenderCamera(base);
                 const float projection = std::max(0.5f, ReadFloat(base, camera + kProjectionOffset));
-                const float offscreen = 6200.0f * g_camera.pullback / projection + 2600.0f;
+                const float offscreen = tekken_force::kCameraBaseDistance * g_camera.pullback / projection + 2600.0f;
                 ActivateEnemy(ctx, base, enemies[0], player, originAlong - offscreen, originDepth - 1400.0f);
                 ActivateEnemy(ctx, base, enemies[1], player, originAlong + offscreen, originDepth + 1400.0f);
                 if (g_fullRoster)
@@ -1202,6 +1226,7 @@ PPC_FUNC(sub_82320AC8)
                     SetFloorPosition(ctx, base, enemy, g_entryMotion[i].x, g_entryMotion[i].z);
                 }
                 ReconcileWalk(ctx, base, enemy, g_motion[i + 1]);
+                ConstrainArenaDepth(ctx,base,enemy);
                 MoveOnFloor(ctx, base, enemy, 0.0f, 0.0f);
                 UpdateEnemy(ctx, base, enemy, player, g_enemies[i], i);
                 g_entryMotion[i] = {};
@@ -1256,6 +1281,7 @@ PPC_FUNC(sub_822CDA88)
             // Keep the run pose, but let arena movement own the entrance distance.
             SetFloorPosition(ctx, base, fighter, g_entryMotion[i - 1].x, g_entryMotion[i - 1].z);
         }
+        ConstrainArenaDepth(ctx,base,fighter);
         g_motion[i].fighter = fighter;
         g_motion[i].x = ReadFloat(base, fighter);
         g_motion[i].z = ReadFloat(base, fighter + 8);
@@ -1263,7 +1289,18 @@ PPC_FUNC(sub_822CDA88)
     }
     // Commit camera travel after native pose/movement reconciliation. A render
     // publication may happen more than once; it must never advance follow.
-    if (!TekkenForceLegacyCamera()) UpdateCameraFollow(base);
+    if (!TekkenForceLegacyCamera())
+    {
+        const uint32_t player=PlayerFighter(base);
+        if(!CanWalk(base,player)) g_cameraCombatFrames=18;
+        if(g_cameraCombatFrames)
+        {
+            g_camera.horizontal.ObserveCombat(ReadFloat(base,player)*g_camera.rightX+
+                ReadFloat(base,player+8)*g_camera.rightZ,g_cameraTick);
+            --g_cameraCombatFrames;
+        }
+        UpdateCameraFollow(base);
+    }
     TekkenForceTraceCamera("follow-commit",base,RenderCamera(base),PlayerFighter(base),g_cameraTick,
         g_camera.eye.data(),g_camera.target.data());
 }

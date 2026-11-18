@@ -1,5 +1,9 @@
 # Milestone 9 camera diagnosis and staged acceptance
 
+This records the earlier camera checkpoint. The owner's subsequent 84-second
+reference and bounded-depth/framing pass are in
+[the visibility notes](tekken_force_visibility_notes.md).
+
 Base: merged main `76e5399` (Milestone 8 PR #4). Branch: `tekken-force-m9`.
 This checkpoint changes camera diagnosis/follow only. The fixed-stage-axis targeting
 comparison is deferred until the owner playtests the camera correction.
