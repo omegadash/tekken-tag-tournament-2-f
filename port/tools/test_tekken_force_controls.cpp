@@ -44,6 +44,20 @@ int main()
         c.Sample(5050, false, 0, false);
         c.Sample(5150, false, direction, true);
         assert(c.depthMotion == 0); // Directional attacks don't initiate steps.
+
+        c = {};
+        c.Sample(6000, false, direction, false);
+        c.Sample(6060, false, 0, false);
+        c.Sample(6251, false, direction, false);
+        assert(c.depthMotion == 0); // A late second tap starts a new gesture.
+        c.Sample(6300, false, 0, false);
+        c.Sample(6380, false, -direction, false);
+        assert(c.depthMotion == 0); // Up then down is not a double tap.
+        c.Sample(6420, false, 0, false);
+        c.Sample(6490, false, -direction, false);
+        assert(c.depthMotion == -direction);
+        c.Sample(6500, false, -direction, true);
+        assert(c.depthMotion == 0); // An attack cancels an ongoing step.
     }
     PlayerControls c;
     c.Sample(1000, true, 0, false);
@@ -54,6 +68,8 @@ int main()
     assert(c.freeMovement);
     assert(c.Sample(1700, true, 1, false) == TargetAction::None);
     assert(c.depthMotion == 1);
+    assert(c.Sample(1700, true, 1, false) == TargetAction::None);
+    assert(c.depthMotion == 1); // Multiple readers cannot repeat an RB action.
     assert(c.Sample(1800, false, 1, false) == TargetAction::None);
     assert(c.freeMovement); // Releasing the hold doesn't reacquire a target.
     c.Sample(2000, true, 0, false);

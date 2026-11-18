@@ -115,16 +115,13 @@ constexpr uint32_t kUsesCpuInput = 1032;
 constexpr uint32_t kOnPoint = 7792;
 constexpr uint32_t kTeam = 7936;
 constexpr uint32_t kPosture = 875;
-constexpr uint8_t kStanding = 3;
 constexpr uint8_t kFirstDownedPosture = 12;
 constexpr float kWalkStep = 24.0f;
-constexpr float kAttackDepth = 320.0f;
 constexpr float kBodyContactDistance = 420.0f;
 constexpr float kEnemyStep = 14.0f;
 constexpr float kEnemyRunStep = 42.0f;
 constexpr float kEnemyStrikeRange = 700.0f;
 constexpr float kEnemyApproachGap = 645.0f;
-constexpr float kEnemyAlignDepth = 115.0f;
 constexpr unsigned kEnemyStartDelay = 45;
 constexpr unsigned kEnemyWindup = 18;
 constexpr unsigned kEnemyRecovery = 54;
@@ -340,11 +337,6 @@ float FloorDepth(float x, float z)
     return -x * g_camera.rightZ + z * g_camera.rightX;
 }
 
-uint32_t WalkDirection(float along)
-{
-    return along < 0.0f ? kWalkLeft : kWalkRight;
-}
-
 bool NativeWalk(uint8_t* base, uint32_t fighter)
 {
     const uint32_t moveset = GRead32(base, fighter + 136);
@@ -380,12 +372,6 @@ bool CanWalk(uint8_t* base, uint32_t fighter)
     const uint32_t neutral = GRead32(base, moveset + 416) + 112 * GRead16(base, moveset + 138);
     // An attack can have standing posture too. Arena walking must not cancel it.
     return GRead32(base, fighter + 280) == neutral || NativeWalk(base, fighter);
-}
-
-float AlongBetween(uint8_t* base, uint32_t from, uint32_t to)
-{
-    return (ReadFloat(base, to) - ReadFloat(base, from)) * g_camera.rightX +
-           (ReadFloat(base, to + 8) - ReadFloat(base, from + 8)) * g_camera.rightZ;
 }
 
 void FaceDirection(uint8_t* base, uint32_t fighter, float x, float z)
