@@ -82,6 +82,8 @@ extern "C" PPC_FUNC(__imp__sub_82715898);
 extern "C" PPC_FUNC(__imp__sub_827142C0);
 extern "C" PPC_FUNC(__imp__sub_8249F158);
 extern "C" PPC_FUNC(__imp__sub_823D4D38);
+extern "C" PPC_FUNC(__imp__sub_823D53C0);
+extern "C" PPC_FUNC(__imp__sub_823D11B8);
 extern "C" PPC_FUNC(__imp__sub_822A8160);
 extern "C" PPC_FUNC(__imp__sub_82314EA0);
 void TekkenForceBlankScreen(bool on);
@@ -605,8 +607,16 @@ void ReconcileWalk(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorMotion
     motion.walking = walking;
 }
 
+bool NativeDuelLocomotion()
+{
+    return g_target && !g_controls.freeMovement && !g_controls.depthMotion;
+}
+
 void MovePlayer(PPCContext& ctx, uint8_t* base, uint32_t fighter)
 {
+    // A locked duel uses the native forward/backward walk, dash and root motion.
+    // Only free movement and the explicit double-tap depth gesture need steering.
+    if (NativeDuelLocomotion()) return;
     const float before=ReadFloat(base,fighter)*g_camera.rightX+ReadFloat(base,fighter+8)*g_camera.rightZ;
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
@@ -1184,7 +1194,7 @@ PPC_FUNC(sub_82320AC8)
         const auto enemies = Enemies(base);
         if (player && enemies[0])
         {
-            ReconcileWalk(ctx, base, player, g_motion[0]);
+            if (!NativeDuelLocomotion()) ReconcileWalk(ctx, base, player, g_motion[0]);
             ConstrainArenaDepth(ctx,base,player);
             if (g_spawnPartner && enemies[1])
             {
@@ -1243,6 +1253,7 @@ PPC_FUNC(sub_82320AC8)
                 const uint32_t actor=actors[i];
                 g_walkMotion[i]={};
                 if (!actor || Defeated(base,actor) || !CanWalk(base,actor)) continue;
+                if (!i && NativeDuelLocomotion()) continue;
                 const bool moving=i ? g_enemies[i-1].walking : horizontal || depth;
                 if (moving || NativeWalk(base,actor))
                     g_walkMotion[i]={actor,ReadFloat(base,actor),ReadFloat(base,actor+8),true,
@@ -1292,7 +1303,8 @@ PPC_FUNC(sub_822CDA88)
     if (!TekkenForceLegacyCamera())
     {
         const uint32_t player=PlayerFighter(base);
-        if(!CanWalk(base,player)) g_cameraCombatFrames=18;
+        if(!CanWalk(base,player) || (NativeDuelLocomotion() && NativeWalk(base,player)))
+            g_cameraCombatFrames=18;
         if(g_cameraCombatFrames)
         {
             g_camera.horizontal.ObserveCombat(ReadFloat(base,player)*g_camera.rightX+
@@ -1506,6 +1518,7 @@ PPC_FUNC(sub_82303BB0)
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
     const int movementDepth=g_controls.freeMovement ? depth : g_controls.depthMotion;
+    if (NativeDuelLocomotion() && !depth) return;
     if (!g_controls.freeMovement && depth && !movementDepth && !g_controls.nativeVerticalHold)
     {
         GWrite32(base,fighter+2048,horizontal ?
@@ -1594,9 +1607,15 @@ void TekkenForcePublishOverlay(uint8_t* base)
 
 PPC_FUNC(sub_82331B50)
 {
-    // Replace the fifth actor's character before the battle loader generates its model command.
-    if (Enabled() && ctx.r4.u32 == 4 && ctx.r5.u32 == kPracticeDummyFighter)
-        ctx.r5.u32 = kCombotFighter;
+    // Costume indices 0/1 are native guest IDs 98/99. Fix the choice before
+    // model resources are requested, including the extra Practice actor.
+    const uint32_t slot = ctx.r4.u32, character = ctx.r5.u32;
+    if (Enabled() && slot >= 1 && slot <= 4 &&
+        (character == kCombotFighter || character == kCombotAlternate ||
+         (slot == 4 && character == kPracticeDummyFighter)))
+    {
+        ctx.r5.u32 = slot >= 3 ? kCombotAlternate : kCombotFighter;
+    }
     __imp__sub_82331B50(ctx, base);
 }
 
@@ -1616,9 +1635,12 @@ PPC_FUNC(sub_82715898)
         color.r3.u32 = 0x82F320E8u; // TU3's native item and default costume palette table.
         color.r4.u32 = character;
         color.r5.u32 = GRead32(base, item);
-        color.r6.u32 = slot % 2 == 0 ? 1 : 0;
+        // Enemy display order is slots 1,3,2,4: Costume 1,2,1,2.
+        color.r6.u32 = slot >= 3 ? 1 : 0;
         __imp__sub_8249F158(color, base);
-        if (color.r3.s32 >= 0) GWrite32(base, item + 4, color.r3.u32);
+        // Unlisted equipment belongs to neither default costume. Clear it
+        // rather than carrying an item over from a stored/Practice outfit.
+        GWrite32(base, item + 4, color.r3.s32 >= 0 ? color.r3.u32 : 0);
     }
 }
 
@@ -1810,6 +1832,11 @@ PPC_FUNC(sub_82314EA0)
         {
             const uint32_t name=GRead32(base,ctx.r3.u32);
             const char* text=name?reinterpret_cast<const char*>(base+name):"";
+            // Preserve the native backward/forward entry and loop transitions.
+            // Forcing neutral+1 here restarts a forward pose every tick while
+            // host translation moves backwards, producing the reported slide.
+            if (NativeDuelLocomotion() &&
+                (std::strstr(text,"sWALK") || std::strstr(text,"sSTEP"))) return;
             if (std::strstr(text,"sYOKE") || std::strstr(text,"sJUMP") ||
                 std::strstr(text,"sSTEP") || std::strstr(text,"sWALK") ||
                 std::strstr(text,"cKAM") || std::strstr(text,"cWALK"))
@@ -1884,11 +1911,28 @@ PPC_FUNC(sub_823D4D38)
     __imp__sub_823D4D38(ctx, base);
 }
 
+PPC_FUNC(sub_823D53C0)
+{
+    // Force has no timed round; hide the native timer/infinity draw itself.
+    if (!InPractice(base)) __imp__sub_823D53C0(ctx, base);
+}
+
+PPC_FUNC(sub_823D11B8)
+{
+    // Only suppress the opponent's under-gauge light from the native two-side
+    // decoration pass. Player decoration and the four small gauges remain.
+    if (InPractice(base) && ctx.lr == 0x823D512Cu &&
+        ctx.r5.u32 == 28 + OpponentSide(base)) return;
+    __imp__sub_823D11B8(ctx, base);
+}
+
 PPC_FUNC(sub_824C75F8)
 {
     const uint32_t slot = ctx.r4.u32, request = ctx.r5.u32;
     __imp__sub_824C75F8(ctx, base);
-    if (Enabled() && slot == 4 && !ctx.r3.u32 && GRead32(base, kPracticeExtra + 88) == kCombotFighter)
+    const uint32_t character = GRead32(base, kPracticeExtra + 88);
+    if (Enabled() && slot == 4 && !ctx.r3.u32 &&
+        (character == kCombotFighter || character == kCombotAlternate))
     {
         // The extra Practice slot has no registered costume resources for these component pairs.
         // Let the native queue retire the missing requests so the base Combot can finish loading.

@@ -99,8 +99,63 @@ timing, so it is not a performance benchmark or exact controller-log reconstruct
 
 ## Remaining stages
 
-Backward-walk animation, fixed-axis targeted locomotion, initial left/right combat
-facing, enemy depth alignment, crowd spacing, selected gauge highlight, costume
-mapping verification, character-name HUD, Practice readout/reset-hint suppression
-and infinity suppression remain subsequent work. Preserve Tulip, four independent
+The owner subsequently replaced the proposed fixed-axis targeted comparison with native
+full-focus duel movement; see the refinement checkpoint below. Enemy depth alignment,
+crowd spacing, selected gauge highlight, character-name HUD and Practice readout/reset-hint
+suppression remain later work. Preserve Tulip, four independent
 Combots, native health bars, exclusive attack turns and the current encounter loop.
+
+
+## Native duel and HUD refinement (19 November 2026)
+
+The owner's latest instruction supersedes the fixed-stage-axis targeting comparison:
+locked forward/backward movement follows the line to the selected enemy like a normal
+match. Free movement and double-tap foreground/background gestures remain available.
+
+Observed cause of the backward slide: the stock Kazuya backward entry started, but
+`sub_82314EA0` subsequently replaced native walk choices with `neutral + 1`, restarting
+a forward-walk pose at frame 1. Host arena translation still moved the fighter away.
+The custom walk reconciliation also discarded native locomotion root displacement.
+
+Locked horizontal locomotion now retains native input execution, walk/backstep choices,
+entry/loop transitions and native root movement. Arena translation/reconciliation applies
+only to free mode and explicit depth gestures. The existing settled-root filter supplies
+native walking travel to the horizontal camera. Target selection still changes facing,
+not the player's floor position or camera basis. Committed moves/reactions retain their
+native motion and duration.
+
+The native timer draw is suppressed only in Force Practice. A scoped sprite-call check
+removes the CPU-side under-gauge light, preserving the player light and small native
+health bars. Costume requests use the two native Combot entries, with default equipment
+scheme indices 0/1 assigned by slots 1,3,2,4 as 0,1,0,1. Equipment absent from the selected
+scheme is cleared. Combot's native fighting-profile request remains enabled: disabling
+it loaded an untuned Combot move table and was rejected during testing. The boot-time
+practice dummy is deliberately not treated as a battle Combot.
+
+Observed checks on the source-built Windows executable:
+- Kazuya and Jun native backward entries/loops advance with both D-pad and stick.
+  All four selected opponents: backward entry and loop advance normally with D-pad/stick;
+  both native left/right facings exercised. Sampled backward-walk facing dot product
+  against the actual selected enemy was at least 0.999 in the final focused replay.
+- Native directional attacks included Kazuya shoryu and low attacks. All four independent
+  enemy health values decreased during normal input-only combat. No HP/pose memory writes
+  were used to manufacture hits or movement.
+- Double-tap depth/second hold, RB cycle, hold-to-free and nearest reacquisition replayed.
+  Reset restored P1 and all four enemies to their independent full health values.
+- Ordinary offline Arcade retained the stock clock/two-side HUD and applied native
+  damage (opponent 168/180 while P1 remained 180/180 in the sampled check).
+- Rendered Force frames show no infinity symbol or CPU-side electric light. Player light,
+  top player bar, four bottom gauges and target arrow remain.
+- Read-only wardrobe inspection confirms native scheme-0 items on slots 1/2 and scheme-1
+  items on slots 3/4. The extra Practice model still shows a pre-existing protruding mesh
+  artifact; these item-table checks do not establish that its entire rendered costume is
+  correct. Do not describe this as a completed fifth-model rendering repair.
+
+- Final session: 14,665 parsed camera publications had one projection (one incomplete/
+  interleaved trace line was excluded). Final 360-frame native replay: background translation at most
+  5 px between adjacent frames in the tracked bridge ROI. This is a continuity check,
+  not proof that all events in earlier owner recordings are resolved.
+
+Native captures and validation samples are local in `port/build-force/playtest/m9-visibility`.
+These are scripted native controller inputs, not a physical DualSense acceptance test.
+The wider milestone remains open for owner playtesting and remaining refinements.

@@ -59,13 +59,20 @@ instances, no Steam).
 Add `--tekken-force` before the image path to put **Tekken Force Test** in the main menu's
 top slot for that session. Select one fighter to control. The game loads Tulip Festival and
 four Combot opponents automatically.
-The installed TU3 palette table provides two Combot color schemes, which repeat across the group.
+Enemies are restricted to the two installed Combot default costume schemes. Their native
+equipment tables select Costume 1/2/1/2 in enemy gauge order; unlisted equipment is cleared.
+The fifth Practice-based model can still show a protruding mesh artifact, so its complete
+rendered outfit remains a known limitation.
 
 The D-pad, left stick, and default keyboard arrow keys use the same controls. While locked
-onto an enemy, left/right move forward or backward along the line between the two fighters.
+onto an enemy, left/right use native Tekken forward/backward walking and move commands
+along the line between the two fighters. Backward movement keeps the fighter facing the
+selected enemy, including when that line is diagonal to the stage. Native walk entry and
+loop animations own their root motion; target selection does not translate the player.
 Double-tap up/down to step into the background/foreground around that enemy; hold the
 second tap to keep walking. A single held up/down retains native jump/crouch after the
-double-tap window. Fighters use stock walk animations. Along-stage travel remains available;
+double-tap window. Fighters use stock walk animations. The Force HUD omits the round timer/infinity symbol
+and the unused opponent-side electric decoration. Along-stage travel remains available;
 foreground/background walking uses a 1.8 m band around the native Tulip starting floor.
 The closer, steeper fixed view keeps depth travel from shrinking combat into the background.
 The side camera follows
