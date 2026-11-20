@@ -35,6 +35,7 @@ extern "C" PPC_FUNC(__imp__sub_822CD798);
 extern "C" PPC_FUNC(__imp__sub_822CDA88);
 extern "C" PPC_FUNC(__imp__sub_822D4B68);
 extern "C" PPC_FUNC(__imp__sub_822D4E10);
+extern "C" PPC_FUNC(__imp__sub_822D3580);
 extern "C" PPC_FUNC(__imp__sub_822E1ED0);
 extern "C" PPC_FUNC(__imp__sub_822E2060);
 extern "C" PPC_FUNC(__imp__sub_822E2590);
@@ -211,11 +212,16 @@ struct BodyMotion
     tekken_force::FloorPoint position{};
     bool lateral = false;
     tekken_force::BodyCore core{};
+    uint64_t walkTick = ~uint64_t(0);
+    tekken_force::FloorPoint walkOffset{};
+    uint32_t walkMove = 0;
+    uint32_t walkFrame = 0;
 };
 std::array<BodyMotion, kMaxEnemies + 1> g_bodyMotion;
 tekken_force::FloorPoint g_stepAxis{};
 int g_stepDirection = 0;
 uint32_t g_stepTarget = 0;
+uint32_t g_walkEntryMoveset = 0, g_forwardWalkEntry = 0;
 
 bool Enabled()
 {
@@ -344,6 +350,7 @@ void ResetControllers(uint8_t* base)
     g_entryMotion = {};
     g_walkMotion = {};
     g_bodyMotion = {};
+    g_walkEntryMoveset = 0;
     g_stepDirection = 0;
     g_cameraCombatFrames = 0;
 }
@@ -375,15 +382,53 @@ float FloorDepth(float x, float z)
     return -x * g_camera.rightZ + z * g_camera.rightX;
 }
 
+const char* MoveName(uint8_t* base, uint32_t move)
+{
+    const uint32_t name = move ? GRead32(base, move) : 0;
+    return name ? reinterpret_cast<const char*>(base + name) : "";
+}
+
+bool LinearWalkName(const char* name)
+{
+    const char* walk = std::strstr(name, "sWALK");
+    if (!walk) return false;
+    // The common animations use sWALK_00F/B. Other characters have their
+    // own sWALKF/B entries. Lateral sWALK_*L/R is a separate gesture.
+    return walk[5] == 'F' || walk[5] == 'B' ||
+           std::strncmp(walk, "sWALK_00F", 9) == 0 ||
+           std::strncmp(walk, "sWALK_00B", 9) == 0;
+}
+
+bool NativeLinearWalk(uint8_t* base, uint32_t fighter)
+{
+    return LinearWalkName(MoveName(base, GRead32(base, fighter + 280)));
+}
+
+uint32_t ForwardWalkEntry(uint8_t* base, uint32_t moveset)
+{
+    if (g_walkEntryMoveset == moveset) return g_forwardWalkEntry;
+    g_walkEntryMoveset = moveset;
+    g_forwardWalkEntry = 0;
+    const uint32_t table = GRead32(base, moveset + 416), count = GRead32(base, moveset + 420);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const uint32_t move = table + i * 112;
+        const char* walk = std::strstr(MoveName(base, move), "sWALK");
+        if (walk && (std::strcmp(walk, "sWALKF") == 0 || std::strcmp(walk, "sWALK_00F") == 0))
+        {
+            g_forwardWalkEntry = move;
+            break;
+        }
+    }
+    return g_forwardWalkEntry;
+}
+
 bool NativeWalk(uint8_t* base, uint32_t fighter)
 {
     const uint32_t moveset = GRead32(base, fighter + 136);
     if (!moveset) return false;
     constexpr uint32_t kMoveSize = 112;
-    // TU3 resolves common stance 0x8001 through the character's move table.
-    // Its forward and backward walk entries follow that stance in the table.
     const uint32_t table = GRead32(base, moveset + 416);
-    const uint32_t neutral = table + kMoveSize * GRead16(base, moveset + 138);
     const uint32_t move = GRead32(base, fighter + 280);
     if (LoadedCombot(base, fighter) && move >= table + kCombotRun * kMoveSize &&
         move <= table + kCombotRunLast * kMoveSize) return true;
@@ -392,7 +437,8 @@ bool NativeWalk(uint8_t* base, uint32_t fighter)
         return move == table + kCombotApproach * kMoveSize ||
                move == table + kCombotWalkMove * kMoveSize || move == table + kCombotWalkLoop * kMoveSize;
     }
-    return move > neutral && move <= neutral + 10 * kMoveSize;
+    const char* name = MoveName(base, move);
+    return LinearWalkName(name) || std::strstr(name, "sDASH");
 }
 
 bool ExtraInMove(uint8_t* base, uint32_t moveId)
@@ -411,9 +457,7 @@ bool NativeLateralName(const char* name)
 
 bool NativeLateralMove(uint8_t* base, uint32_t fighter)
 {
-    const uint32_t move = GRead32(base, fighter + 280);
-    const uint32_t name = move ? GRead32(base, move) : 0;
-    return name && NativeLateralName(reinterpret_cast<const char*>(base + name));
+    return NativeLateralName(MoveName(base, GRead32(base, fighter + 280)));
 }
 
 bool CanWalk(uint8_t* base, uint32_t fighter)
@@ -686,6 +730,12 @@ void SaveBodyPositions(uint8_t* base)
     }
 }
 
+bool LockedLinearWalk(uint8_t* base, uint32_t fighter)
+{
+    return fighter == PlayerFighter(base) && g_target && !g_controls.freeMovement &&
+           !g_controls.depthMotion && NativeLinearWalk(base, fighter);
+}
+
 void ResolveNativeBodyMotion(PPCContext& ctx, uint8_t* base)
 {
     // Resolve each native displacement against positions already accepted in
@@ -701,6 +751,14 @@ void ResolveNativeBodyMotion(PPCContext& ctx, uint8_t* base)
         const bool lateral = player && NativeLateralMove(base, fighter);
         const bool steeredWalk = player && (g_controls.depthMotion || g_controls.freeMovement) &&
             CanWalk(base, fighter);
+        if (LockedLinearWalk(base, fighter))
+        {
+            // The native root gets the accumulated walk cycle again when the
+            // loop restarts. The animation phase consumes the per-frame motion.
+            SetFloorPosition(ctx, base, fighter, start.x, start.z);
+            motion.lateral = false;
+            continue;
+        }
         if (lateral || steeredWalk || (motion.lateral && CanWalk(base, fighter)))
             end = start;
         motion.lateral = lateral;
@@ -1393,6 +1451,52 @@ PPC_FUNC(sub_822CD798)
         __imp__sub_82445A50(sample, base);
     }
     CallOnFighter(ctx, base, __imp__sub_82294410, kPracticeExtra);
+}
+
+PPC_FUNC(sub_822D3580)
+{
+    __imp__sub_822D3580(ctx, base);
+    if (!InPractice(base) || !g_camera.ready) return;
+    const uint32_t player = PlayerFighter(base);
+    auto* body = FighterBody(player);
+    if (!body || !SolidBody(base, *body)) return;
+
+    const uint32_t move = GRead32(base, player + 280);
+    const bool walk = LinearWalkName(MoveName(base, move));
+    const bool finishingWalk = body->walkMove && CanWalk(base, player);
+    if (!walk && !finishingWalk)
+    {
+        body->walkMove = 0;
+        return;
+    }
+    if (body->walkTick != g_cameraTick)
+    {
+        // This phase advances the displayed pose again after the model hook.
+        // The difference between successive native offsets is one walk step.
+        // A loop reset is a new origin and must never travel the whole cycle.
+        const uint32_t frame = GRead32(base, player + 212);
+        const FloorPoint root = FloorPosition(base, player);
+        const FloorPoint offset{ReadFloat(base, player + 20) - root.x,
+                                ReadFloat(base, player + 28) - root.z};
+        if (walk && LockedLinearWalk(base, player))
+        {
+            const bool sameCycle = move == body->walkMove && frame >= body->walkFrame;
+            const FloorPoint previous = sameCycle ? body->walkOffset : FloorPoint{};
+            const float dx = offset.x - previous.x, dz = offset.z - previous.z;
+            constexpr float kMaxWalkStep = 48.0f;
+            if (std::hypot(dx, dz) <= kMaxWalkStep)
+            {
+                const auto start = body->position;
+                body->position = ClipBodyTravel(base, *body, start, {start.x + dx, start.z + dz});
+            }
+        }
+        body->walkMove = walk ? move : 0;
+        body->walkFrame = frame;
+        body->walkOffset = offset;
+        body->walkTick = g_cameraTick;
+    }
+    SetFloorPosition(ctx, base, player, body->position.x, body->position.z);
+    CallOnFighter(ctx, base, __imp__sub_82294410, player);
 }
 
 PPC_FUNC(sub_82323CF8)
@@ -2108,13 +2212,9 @@ PPC_FUNC(sub_82314EA0)
         if (CanWalk(base,fighter) && !(TekkenForceReadButtons()&0xF000u) &&
             (g_controls.freeMovement || !g_controls.nativeVerticalHold) && ctx.r3.u32)
         {
-            const uint32_t name=GRead32(base,ctx.r3.u32);
-            const char* text=name?reinterpret_cast<const char*>(base+name):"";
-            // Preserve the native backward/forward entry and loop transitions.
-            // Forcing neutral+1 here restarts a forward pose every tick while
-            // host translation moves backwards, producing the reported slide.
-            if (NativeDuelLocomotion() && !NativeLateralName(text) &&
-                (std::strstr(text,"sWALK") || std::strstr(text,"sSTEP"))) return;
+            const char* text = MoveName(base, ctx.r3.u32);
+            // Keep the native walk animation and its entry/loop transitions.
+            if (LinearWalkName(text)) return;
             if (std::strstr(text,"sYOKE") || std::strstr(text,"sJUMP") ||
                 std::strstr(text,"sSTEP") || std::strstr(text,"sWALK") ||
                 std::strstr(text,"cKAM") || std::strstr(text,"cWALK"))
@@ -2124,7 +2224,8 @@ PPC_FUNC(sub_82314EA0)
                 if (!g_controls.freeMovement) depth=g_controls.depthMotion;
                 const uint32_t moveset=GRead32(base,fighter+136);
                 const uint32_t neutral=GRead16(base,moveset+138);
-                ctx.r3.u32=GRead32(base,moveset+416)+(neutral+((horizontal||depth)?1:0))*112;
+                const uint32_t walk = (horizontal || depth) ? ForwardWalkEntry(base, moveset) : 0;
+                ctx.r3.u32 = walk ? walk : GRead32(base,moveset+416) + neutral * 112;
             }
         }
         return;

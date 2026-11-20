@@ -218,3 +218,35 @@ remained in the Miguel run. This check covers collision of the core volumes.
 Limb and mesh contact and physical controller feel still need visual playtesting.
 The local renders and logs are in `port/build-force/playtest/m9-visibility` as
 `pushbox-base-*`, `pushbox-first-*` and `pushbox-model-*`.
+
+### Walk cycles at body contact
+
+In `collisions_3.mp4`, the player advances into the selected Combot and can
+appear briefly on the other side of it, for example around 27 s. Miguel's
+scripted replay on `98d103d` reproduced the underlying drift on all four
+targets. The collision-approved root stayed fixed while the displayed walk
+pose kept advancing by about 33 mm per tick. When the animation re-anchored
+partway through the loop, the pose snapped back by up to 704 mm in one tick.
+
+The native animation phase advances the pose after the original model check.
+Force now samples the per-frame walk displacement at the end of that phase,
+clips it against the same live bodies, and publishes the accepted position to
+both the gameplay root and the model. Large changes to the native walk anchor
+and walk-cycle resets no longer apply the whole offset a second time. Real
+forward and backward walk animations are recognized by their native names.
+Miguel's moveset stores them separately from his neutral stance, so assuming
+that the next move is forward walk could start his alternate stance instead.
+
+A scripted Miguel replay through the normal launcher used both D-pad and stick,
+approached and backed away from all four lock targets, cycled lock, used free
+movement, and double-tapped both depth directions. The largest adjacent
+published player pose change in the approach sequence fell from 704 to
+109 mm including reactions, and in the retreat sequence from 659 to 45 mm.
+The approach had zero samples over 300 mm of divergence between the published
+pose and gameplay root, down from 358. The final replay still damaged all four
+Combots and reset all five fighters. A separate replay defeated a Combot,
+waited for it to leave the stage, cycled to a surviving target, and held
+forward into contact. Native attack poses can still overlap
+visually. These measurements are from scripted input rather than a physical
+controller. Local samples and camera traces are named `c3-base` and `c3-phase`
+in `port/build-force/playtest/m9-visibility`.
