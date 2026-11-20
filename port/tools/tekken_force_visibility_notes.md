@@ -186,3 +186,35 @@ free walking, and combat. RB cycling visited all four enemies. All four could
 still take damage, and the position reset restored all five health values.
 These results describe the sampled sequence and leave physical controller
 feel and pose or limb overlap for visual playtesting.
+
+### Pose-aware contact follow-up
+
+The follow-up recording `collisions_2.mp4` still shows fighters crowding into each
+other during close movement. Inspecting adjacent frames around 5.0 s, 32.85 s,
+and 40.1 s showed overlapping walk and guard poses. On `2cd0bba`, a Kazuya
+replay reproduced overlap between the native pelvis volumes even when the
+fighter roots held the 420 mm minimum.
+
+Force now uses the native upper-body and pelvis push spheres relative to their
+pose origin. It sweeps the shapes during steering and native displacement and
+resolves overlap from an animation's lean even when both roots are stationary.
+The separate model displacement also gets a contact check before model update.
+An enemy can start its attack if the player's body stops its approach, so a
+wider stance does not leave it walking in place outside the old range check.
+
+The original and first pose-based Kazuya runs recorded 1,586 and 22 raw
+player/enemy pelvis-pair samples respectively with over 100 mm of penetration.
+Those are read-only samples of native buffer contents, which can be read before
+collision resolution or after the pose has advanced. The final model check was
+run with Miguel on Tulip through the usual launcher. Rendered close-contact
+captures showed clearer torso spacing during walking and sidestepping. During
+combat all four enemies lost health (230/230/180/230 to 186/195/136/195), and
+reset restored the player and all four enemies. Windows build and both Force
+tests passed, including an offset-body sweep, a vertical clearance case and
+overlap from a pose change without root movement.
+
+Some raw overlap samples and a large native attack-transition pose change
+remained in the Miguel run. This check covers collision of the core volumes.
+Limb and mesh contact and physical controller feel still need visual playtesting.
+The local renders and logs are in `port/build-force/playtest/m9-visibility` as
+`pushbox-base-*`, `pushbox-first-*` and `pushbox-model-*`.

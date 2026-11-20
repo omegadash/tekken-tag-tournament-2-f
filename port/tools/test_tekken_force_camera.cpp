@@ -69,5 +69,15 @@ int main()
     assert(BodyTravelFraction({-419, 0}, {-450, 0}, {0, 0}) == 1);
     assert(BodyTravelFraction({-420, 0}, {-420, 24}, {0, 0}) == 1);
     assert(BodyTravelFraction({-900, 421}, {900, 421}, {0, 0}) == 1);
+    const tekken_force::BodyCore leaning{{{{130, 0}, 1000, 360}, {}}};
+    const tekken_force::BodyCore standing{{{{0, 0}, 1000, 360}, {}}};
+    const tekken_force::BodyCore airborne{{{{0, 0}, 1800, 360}, {}}};
+    // The leading torso collides earlier than the root, including during a dash.
+    assert(std::abs(BodyTravelFraction({-1200, 0}, {300, 0}, leaning, {0, 0}, standing) -
+                    350.0f / 1500.0f) < .0001f);
+    assert(BodyTravelFraction({-900, 0}, {-800, 0}, leaning, {0, 0}, airborne) == 1);
+    // A lean can create a core overlap without moving either fighter's root.
+    assert(tekken_force::BodySeparation({-750, 0}, leaning, {0, 0}, standing, {1, 0}) == 100);
+    assert(tekken_force::BodySeparation({-850, 0}, leaning, {0, 0}, standing, {1, 0}) == 0);
     std::puts("PASS dead zone, bounded camera acceleration, idle reference, once-per-tick follow and floor band");
 }

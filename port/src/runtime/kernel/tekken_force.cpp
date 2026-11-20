@@ -205,7 +205,14 @@ struct FloorMotion
 std::array<FloorMotion, kMaxEnemies + 1> g_motion;
 std::array<FloorMotion, kMaxEnemies> g_entryMotion;
 std::array<FloorMotion, kMaxEnemies + 1> g_walkMotion;
-std::array<FloorMotion, kMaxEnemies + 1> g_bodyMotion;
+struct BodyMotion
+{
+    uint32_t fighter = 0;
+    tekken_force::FloorPoint position{};
+    bool lateral = false;
+    tekken_force::BodyCore core{};
+};
+std::array<BodyMotion, kMaxEnemies + 1> g_bodyMotion;
 tekken_force::FloorPoint g_stepAxis{};
 int g_stepDirection = 0;
 uint32_t g_stepTarget = 0;
@@ -547,17 +554,16 @@ void UpdateTarget(uint8_t* base, uint32_t player)
         std::fprintf(stderr, "[tf-target] actor=%08X free=%u\n", g_target,unsigned(g_controls.freeMovement));
 }
 
-void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x, float z)
+uint32_t FighterPose(const PPCContext& ctx, uint8_t* base, uint32_t fighter)
 {
-    if (InPractice(base) && g_camera.ready && (fighter==PlayerFighter(base) || IsEnemy(base,fighter)))
-        tekken_force::ClampArenaDepth(x,z,g_camera.centerX,g_camera.centerZ,g_camera.rightX,g_camera.rightZ);
-    // Keep the logical position and the pose origin used by the hit volumes in sync.
     PPCContext query = ctx;
     query.r3.u32 = fighter;
     __imp__sub_82396828(query, base);
-    const uint32_t pose = query.r3.u32;
-    WriteFloat(base, fighter, x);
-    WriteFloat(base, fighter + 8, z);
+    return query.r3.u32;
+}
+
+void SetPoseFloorPosition(uint8_t* base, uint32_t fighter, uint32_t pose, float x, float z)
+{
     WriteFloat(base, fighter + 20, x);
     WriteFloat(base, fighter + 28, z);
     if (pose)
@@ -565,6 +571,17 @@ void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x,
         WriteFloat(base, pose + 48, x);
         WriteFloat(base, pose + 56, z);
     }
+}
+
+void SetFloorPosition(PPCContext& ctx, uint8_t* base, uint32_t fighter, float x, float z)
+{
+    if (InPractice(base) && g_camera.ready && (fighter==PlayerFighter(base) || IsEnemy(base,fighter)))
+        tekken_force::ClampArenaDepth(x,z,g_camera.centerX,g_camera.centerZ,g_camera.rightX,g_camera.rightZ);
+    // Keep the logical position and the pose origin used by the hit volumes in sync.
+    const uint32_t pose = FighterPose(ctx, base, fighter);
+    WriteFloat(base, fighter, x);
+    WriteFloat(base, fighter + 8, z);
+    SetPoseFloorPosition(base, fighter, pose, x, z);
 }
 
 void ConstrainArenaDepth(PPCContext& ctx,uint8_t* base,uint32_t fighter)
@@ -594,21 +611,67 @@ bool SolidBody(uint8_t* base, uint32_t fighter)
     return fighter && GRead32(base, fighter + kOnStage) && !Defeated(base, fighter);
 }
 
-void MoveWithBodyContact(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorPoint end)
+bool SolidBody(uint8_t* base, const BodyMotion& body)
+{
+    return SolidBody(base, body.fighter);
+}
+
+BodyMotion* FighterBody(uint32_t fighter)
+{
+    for (auto& body : g_bodyMotion)
+        if (body.fighter == fighter) return &body;
+    return nullptr;
+}
+
+void RefreshBodyCores(const PPCContext& ctx, uint8_t* base)
+{
+    constexpr unsigned kPushSpheres = 2512;
+    constexpr unsigned kSphereSize = 16;
+    constexpr unsigned kCoreIndices[] = {0, 3}; // Native upper body and pelvis.
+    for (auto& body : g_bodyMotion)
+    {
+        body.core = {};
+        if (!SolidBody(base, body)) continue;
+        // The native push solver uses this pose origin. The gameplay root can
+        // temporarily differ from it while a move changes stance or direction.
+        const uint32_t pose = FighterPose(ctx, base, body.fighter);
+        if (!pose) continue;
+        const FloorPoint origin{ReadFloat(base, pose + 48), ReadFloat(base, pose + 56)};
+        for (unsigned i = 0; i < body.core.size(); ++i)
+        {
+            const uint32_t sphere = body.fighter + kPushSpheres + kCoreIndices[i] * kSphereSize;
+            const float x = ReadFloat(base, sphere) - origin.x;
+            const float z = ReadFloat(base, sphere + 8) - origin.z;
+            const float y = ReadFloat(base, sphere + 4);
+            const float radius = ReadFloat(base, sphere + 12);
+            // A freshly spawned/unbuilt skeleton may have no usable sphere.
+            if (radius > 0.0f && radius < 900.0f && std::hypot(x, z) < 900.0f && std::isfinite(y))
+                body.core[i] = {{x, z}, y, radius};
+        }
+    }
+}
+
+FloorPoint ClipBodyTravel(uint8_t* base, const BodyMotion& body, FloorPoint start,
+                         FloorPoint end, uint32_t separateFrom = 0)
 {
     tekken_force::ClampArenaDepth(end.x, end.z, g_camera.centerX, g_camera.centerZ,
         g_camera.rightX, g_camera.rightZ);
-    const FloorPoint start = FloorPosition(base, fighter);
     float travel = 1.0f;
-    if (SolidBody(base, fighter))
-        for (const uint32_t other : ArenaActors(base))
-            if (other != fighter && SolidBody(base, other))
-                travel = std::min(travel, tekken_force::BodyTravelFraction(start, end, FloorPosition(base, other)));
-    const FloorPoint accepted{std::lerp(start.x, end.x, travel), std::lerp(start.z, end.z, travel)};
+    for (const auto& other : g_bodyMotion)
+        if (other.fighter != body.fighter && other.fighter != separateFrom && SolidBody(base, other))
+            travel = std::min(travel,
+                tekken_force::BodyTravelFraction(start, end, body.core, other.position, other.core));
+    return {std::lerp(start.x, end.x, travel), std::lerp(start.z, end.z, travel)};
+}
+
+void MoveWithBodyContact(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorPoint end)
+{
+    const FloorPoint start = FloorPosition(base, fighter);
+    auto* body = FighterBody(fighter);
+    const FloorPoint accepted = body && SolidBody(base, *body) ? ClipBodyTravel(base, *body, start, end) : end;
     if (accepted.x != start.x || accepted.z != start.z)
         SetFloorPosition(ctx, base, fighter, accepted.x, accepted.z);
-    for (auto& motion : g_bodyMotion)
-        if (motion.fighter == fighter) { motion.x = accepted.x; motion.z = accepted.z; break; }
+    if (body) body->position = FloorPosition(base, fighter);
 }
 
 void SaveBodyPositions(uint8_t* base)
@@ -618,8 +681,7 @@ void SaveBodyPositions(uint8_t* base)
     {
         g_bodyMotion[i] = {};
         if (!SolidBody(base, actors[i])) continue;
-        const auto point = FloorPosition(base, actors[i]);
-        g_bodyMotion[i] = {actors[i], point.x, point.z,
+        g_bodyMotion[i] = {actors[i], FloorPosition(base, actors[i]),
             i == 0 && NativeLateralMove(base, actors[i])};
     }
 }
@@ -634,26 +696,109 @@ void ResolveNativeBodyMotion(PPCContext& ctx, uint8_t* base)
         if (!SolidBody(base, fighter)) continue;
         const auto proposed = FloorPosition(base, fighter);
         auto end = proposed;
-        const FloorPoint start{motion.x, motion.z};
+        const FloorPoint start = motion.position;
         const bool player = fighter == PlayerFighter(base);
         const bool lateral = player && NativeLateralMove(base, fighter);
         const bool steeredWalk = player && (g_controls.depthMotion || g_controls.freeMovement) &&
             CanWalk(base, fighter);
-        if (lateral || steeredWalk || (motion.walking && CanWalk(base, fighter)))
+        if (lateral || steeredWalk || (motion.lateral && CanWalk(base, fighter)))
             end = start;
-        motion.walking = lateral;
-        tekken_force::ClampArenaDepth(end.x, end.z, g_camera.centerX, g_camera.centerZ,
-            g_camera.rightX, g_camera.rightZ);
-        float travel = 1.0f;
-        for (const auto& other : g_bodyMotion)
-            if (other.fighter != fighter && SolidBody(base, other.fighter))
-                travel = std::min(travel, tekken_force::BodyTravelFraction(start, end, {other.x, other.z}));
-        const FloorPoint accepted{std::lerp(start.x, end.x, travel), std::lerp(start.z, end.z, travel)};
+        motion.lateral = lateral;
+        const FloorPoint accepted = ClipBodyTravel(base, motion, start, end);
         if (accepted.x != proposed.x || accepted.z != proposed.z)
             SetFloorPosition(ctx, base, fighter, accepted.x, accepted.z);
-        motion.x = accepted.x;
-        motion.z = accepted.z;
+        motion.position = accepted;
     }
+}
+
+void ResolveModelBodyMotion(PPCContext& ctx, uint8_t* base)
+{
+    // Native attacks and stance changes can move a model's origin while
+    // leaving its gameplay root in place. Sweep that separate displacement
+    // before publishing the model, using the same cores as floor movement.
+    std::array<FloorPoint, kMaxEnemies + 1> visible{};
+    for (unsigned i = 0; i < visible.size(); ++i) visible[i] = g_bodyMotion[i].position;
+    for (unsigned i = 0; i < visible.size(); ++i)
+    {
+        const auto& body = g_bodyMotion[i];
+        if (!SolidBody(base, body)) continue;
+        const uint32_t pose = FighterPose(ctx, base, body.fighter);
+        if (!pose) continue;
+        const FloorPoint proposed{ReadFloat(base, pose + 48), ReadFloat(base, pose + 56)};
+        const FloorPoint start = visible[i];
+        float travel = 1.0f;
+        for (unsigned j = 0; j < visible.size(); ++j)
+            if (i != j && SolidBody(base, g_bodyMotion[j]))
+                travel = std::min(travel,
+                    tekken_force::BodyTravelFraction(start, proposed, body.core, visible[j], g_bodyMotion[j].core));
+        visible[i] = {std::lerp(start.x, proposed.x, travel), std::lerp(start.z, proposed.z, travel)};
+        if (travel < 1.0f)
+            SetPoseFloorPosition(base, body.fighter, pose, visible[i].x, visible[i].z);
+    }
+}
+
+float MoveApart(PPCContext& ctx, uint8_t* base, unsigned index,
+                uint32_t separateFrom, FloorPoint direction, float distance)
+{
+    auto& body = g_bodyMotion[index];
+    const FloorPoint start = body.position;
+    const FloorPoint end{start.x + direction.x * distance, start.z + direction.z * distance};
+    const auto accepted = ClipBodyTravel(base, body, start, end, separateFrom);
+    const float dx = accepted.x - start.x, dz = accepted.z - start.z;
+    if (dx == 0.0f && dz == 0.0f) return 0.0f;
+    SetFloorPosition(ctx, base, body.fighter, accepted.x, accepted.z);
+    body.position = accepted;
+    // Keep the arena's pending walk/entrance restoration at the corrected point.
+    auto& walk = g_walkMotion[index];
+    if (walk.fighter == body.fighter) { walk.x += dx; walk.z += dz; }
+    if (index)
+    {
+        auto& entry = g_entryMotion[index - 1];
+        if (entry.fighter == body.fighter) { entry.x += dx; entry.z += dz; }
+    }
+    return std::max(0.0f, dx * direction.x + dz * direction.z);
+}
+
+void SeparateBodyCores(PPCContext& ctx, uint8_t* base)
+{
+    constexpr float kMaxCorrection = 120.0f;
+    std::array<float, kMaxEnemies + 1> remaining{};
+    remaining.fill(kMaxCorrection);
+    // A pose can lean into contact even when the root is stationary. Push the
+    // enemy first in a player pair, sharing the correction if it is boxed in.
+    for (unsigned i = 0; i < g_bodyMotion.size(); ++i)
+        for (unsigned j = i + 1; j < g_bodyMotion.size(); ++j)
+        {
+            auto& a = g_bodyMotion[i];
+            auto& b = g_bodyMotion[j];
+            if (!SolidBody(base, a) || !SolidBody(base, b)) continue;
+            const float dx = b.position.x - a.position.x, dz = b.position.z - a.position.z;
+            const float length = std::hypot(dx, dz);
+            const FloorPoint away = length > 1.0f ? FloorPoint{dx / length, dz / length}
+                                                 : FloorPoint{g_camera.rightX, g_camera.rightZ};
+            const float overlap = tekken_force::BodySeparation(a.position, a.core, b.position, b.core, away);
+            if (overlap < 1.0f) continue;
+            const float moved = MoveApart(ctx, base, j, a.fighter, away, std::min(overlap, remaining[j]));
+            remaining[j] = std::max(0.0f, remaining[j] - moved);
+            const float needed = std::min(overlap - moved, remaining[i]);
+            if (needed > 1.0f)
+                remaining[i] = std::max(0.0f, remaining[i] -
+                    MoveApart(ctx, base, i, b.fighter, {-away.x, -away.z}, needed));
+        }
+}
+
+bool PlayerBlocksApproach(uint32_t enemy, uint32_t player, float dx, float dz, float range)
+{
+    // Opponents still attack when the player core stops them just outside
+    // the default strike trigger. Contact with another enemy does not count.
+    if (range >= 950.0f) return false;
+    const auto* actor = FighterBody(enemy);
+    const auto* target = FighterBody(player);
+    if (!actor || !target) return false;
+    const float probe = 32.0f / std::max(1.0f, range);
+    const FloorPoint end{actor->position.x + dx * probe, actor->position.z + dz * probe};
+    return tekken_force::BodyTravelFraction(actor->position, end, actor->core,
+                                             target->position, target->core) < 1.0f;
 }
 
 void ActivateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player, float along, float depth)
@@ -893,7 +1038,7 @@ void UpdateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player
     float forward, across;
     if (ownsTurn || controller.entering)
     {
-        if (ownsTurn && range <= kEnemyStrikeRange)
+        if (ownsTurn && (range <= kEnemyStrikeRange || PlayerBlocksApproach(enemy, player, x, z, range)))
         {
             controller.phase = EnemyPhase::Windup;
             controller.framesLeft = kEnemyWindup;
@@ -1101,7 +1246,12 @@ PPC_FUNC(sub_822D4B68)
 PPC_FUNC(sub_822D4E10)
 {
     __imp__sub_822D4E10(ctx, base);
-    if (InPractice(base) && g_camera.ready) ResolveNativeBodyMotion(ctx, base);
+    if (InPractice(base) && g_camera.ready)
+    {
+        RefreshBodyCores(ctx, base);
+        ResolveNativeBodyMotion(ctx, base);
+        SeparateBodyCores(ctx, base);
+    }
 }
 
 // Both guest collision paths queue hit reactions and damage for this pair.
@@ -1225,7 +1375,11 @@ PPC_FUNC(sub_822CD798)
 {
     // Native animation/root processing also runs between battle ticks.
     // Resolve any resulting displacement before publishing the model.
-    if (InPractice(base) && g_camera.ready) ResolveNativeBodyMotion(ctx, base);
+    if (InPractice(base) && g_camera.ready)
+    {
+        ResolveNativeBodyMotion(ctx, base);
+        ResolveModelBodyMotion(ctx, base);
+    }
     __imp__sub_822CD798(ctx, base);
     if (!ExtraActive(base)) return;
     const uint32_t models = GRead32(base, kFighterModels);
