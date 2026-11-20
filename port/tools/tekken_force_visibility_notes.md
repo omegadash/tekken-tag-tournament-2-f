@@ -159,3 +159,30 @@ Observed checks on the source-built Windows executable:
 Native captures and validation samples are local in `port/build-force/playtest/m9-visibility`.
 These are scripted native controller inputs, not a physical DualSense acceptance test.
 The wider milestone remains open for owner playtesting and remaining refinements.
+
+## Sidestep and body contact (20 November 2026)
+
+The owner recordings `sideSteps.mp4` and `collisions.mp4` show the input history
+alongside abrupt lateral movement and fighters occupying the same floor space.
+A local replay on `aff6631` reproduced both. In the alternating up/down sequence,
+native lateral walk and step animations still contributed root motion after
+Force had applied its own displacement. The committed root reached 1,489 mm
+of horizontal travel in one tick, and the render publication reached 1,502 mm.
+A live pair came within 67 mm in the replay.
+
+Each locked depth gesture now keeps its initial step direction, and Force owns
+the displacement of native lateral poses. Body contact sweeps the proposed
+floor movement against all other live fighters, stopping at 420 mm of root
+separation. This applies to player movement, enemy approaches and spacing, and
+native displacement before hit detection and model update. Attack hit volumes
+remain separate from body contact.
+
+The final Windows build passed both Force tests and a scripted replay through
+the normal Force launcher. The alternating sidestep replay had a largest
+published horizontal change of 200 mm during a guard reaction, versus 1,502 mm
+on the starting build. Other ordinary step samples reached 24 mm per tick.
+The nearest sampled live body gap was 420 mm across sidesteps, dash attempts,
+free walking, and combat. RB cycling visited all four enemies. All four could
+still take damage, and the position reset restored all five health values.
+These results describe the sampled sequence and leave physical controller
+feel and pose or limb overlap for visual playtesting.

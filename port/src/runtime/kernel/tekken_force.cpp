@@ -34,6 +34,7 @@ extern "C" PPC_FUNC(__imp__sub_822CBD80);
 extern "C" PPC_FUNC(__imp__sub_822CD798);
 extern "C" PPC_FUNC(__imp__sub_822CDA88);
 extern "C" PPC_FUNC(__imp__sub_822D4B68);
+extern "C" PPC_FUNC(__imp__sub_822D4E10);
 extern "C" PPC_FUNC(__imp__sub_822E1ED0);
 extern "C" PPC_FUNC(__imp__sub_822E2060);
 extern "C" PPC_FUNC(__imp__sub_822E2590);
@@ -122,7 +123,6 @@ constexpr uint32_t kTeam = 7936;
 constexpr uint32_t kPosture = 875;
 constexpr uint8_t kFirstDownedPosture = 12;
 constexpr float kWalkStep = 24.0f;
-constexpr float kBodyContactDistance = 420.0f;
 constexpr float kEnemyStep = 14.0f;
 constexpr float kEnemyRunStep = 42.0f;
 constexpr float kEnemyStrikeRange = 700.0f;
@@ -205,6 +205,10 @@ struct FloorMotion
 std::array<FloorMotion, kMaxEnemies + 1> g_motion;
 std::array<FloorMotion, kMaxEnemies> g_entryMotion;
 std::array<FloorMotion, kMaxEnemies + 1> g_walkMotion;
+std::array<FloorMotion, kMaxEnemies + 1> g_bodyMotion;
+tekken_force::FloorPoint g_stepAxis{};
+int g_stepDirection = 0;
+uint32_t g_stepTarget = 0;
 
 bool Enabled()
 {
@@ -332,6 +336,8 @@ void ResetControllers(uint8_t* base)
     g_motion = {};
     g_entryMotion = {};
     g_walkMotion = {};
+    g_bodyMotion = {};
+    g_stepDirection = 0;
     g_cameraCombatFrames = 0;
 }
 
@@ -389,6 +395,20 @@ bool ExtraInMove(uint8_t* base, uint32_t moveId)
     return GRead32(base, kPracticeExtra + 280) == table + moveId * kMoveSize;
 }
 
+bool NativeLateralName(const char* name)
+{
+    if (std::strncmp(name, "sYOKE", 5) == 0 || std::strncmp(name, "sSTEP_", 6) == 0) return true;
+    return std::strncmp(name, "sWALK_", 6) == 0 && std::strlen(name) == 9 &&
+           (name[8] == 'L' || name[8] == 'R');
+}
+
+bool NativeLateralMove(uint8_t* base, uint32_t fighter)
+{
+    const uint32_t move = GRead32(base, fighter + 280);
+    const uint32_t name = move ? GRead32(base, move) : 0;
+    return name && NativeLateralName(reinterpret_cast<const char*>(base + name));
+}
+
 bool CanWalk(uint8_t* base, uint32_t fighter)
 {
     const uint8_t posture = GRead8(base, fighter + kPosture);
@@ -396,7 +416,8 @@ bool CanWalk(uint8_t* base, uint32_t fighter)
     if (!moveset || posture >= kFirstDownedPosture) return false;
     const uint32_t neutral = GRead32(base, moveset + 416) + 112 * GRead16(base, moveset + 138);
     // An attack can have standing posture too. Arena walking must not cancel it.
-    return GRead32(base, fighter + 280) == neutral || NativeWalk(base, fighter);
+    return GRead32(base, fighter + 280) == neutral || NativeWalk(base, fighter) ||
+           (fighter == PlayerFighter(base) && NativeLateralMove(base, fighter));
 }
 
 void FaceDirection(uint8_t* base, uint32_t fighter, float x, float z)
@@ -555,6 +576,86 @@ void ConstrainArenaDepth(PPCContext& ctx,uint8_t* base,uint32_t fighter)
         SetFloorPosition(ctx,base,fighter,nextX,nextZ);
 }
 
+using tekken_force::FloorPoint;
+
+FloorPoint FloorPosition(uint8_t* base, uint32_t fighter)
+{
+    return {ReadFloat(base, fighter), ReadFloat(base, fighter + 8)};
+}
+
+std::array<uint32_t, kMaxEnemies + 1> ArenaActors(uint8_t* base)
+{
+    const auto enemies = Enemies(base);
+    return {PlayerFighter(base), enemies[0], enemies[1], enemies[2], enemies[3]};
+}
+
+bool SolidBody(uint8_t* base, uint32_t fighter)
+{
+    return fighter && GRead32(base, fighter + kOnStage) && !Defeated(base, fighter);
+}
+
+void MoveWithBodyContact(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorPoint end)
+{
+    tekken_force::ClampArenaDepth(end.x, end.z, g_camera.centerX, g_camera.centerZ,
+        g_camera.rightX, g_camera.rightZ);
+    const FloorPoint start = FloorPosition(base, fighter);
+    float travel = 1.0f;
+    if (SolidBody(base, fighter))
+        for (const uint32_t other : ArenaActors(base))
+            if (other != fighter && SolidBody(base, other))
+                travel = std::min(travel, tekken_force::BodyTravelFraction(start, end, FloorPosition(base, other)));
+    const FloorPoint accepted{std::lerp(start.x, end.x, travel), std::lerp(start.z, end.z, travel)};
+    if (accepted.x != start.x || accepted.z != start.z)
+        SetFloorPosition(ctx, base, fighter, accepted.x, accepted.z);
+    for (auto& motion : g_bodyMotion)
+        if (motion.fighter == fighter) { motion.x = accepted.x; motion.z = accepted.z; break; }
+}
+
+void SaveBodyPositions(uint8_t* base)
+{
+    const auto actors = ArenaActors(base);
+    for (unsigned i = 0; i < actors.size(); ++i)
+    {
+        g_bodyMotion[i] = {};
+        if (!SolidBody(base, actors[i])) continue;
+        const auto point = FloorPosition(base, actors[i]);
+        g_bodyMotion[i] = {actors[i], point.x, point.z,
+            i == 0 && NativeLateralMove(base, actors[i])};
+    }
+}
+
+void ResolveNativeBodyMotion(PPCContext& ctx, uint8_t* base)
+{
+    // Resolve each native displacement against positions already accepted in
+    // this pass, or the previous positions of fighters still to be processed.
+    for (auto& motion : g_bodyMotion)
+    {
+        const uint32_t fighter = motion.fighter;
+        if (!SolidBody(base, fighter)) continue;
+        const auto proposed = FloorPosition(base, fighter);
+        auto end = proposed;
+        const FloorPoint start{motion.x, motion.z};
+        const bool player = fighter == PlayerFighter(base);
+        const bool lateral = player && NativeLateralMove(base, fighter);
+        const bool steeredWalk = player && (g_controls.depthMotion || g_controls.freeMovement) &&
+            CanWalk(base, fighter);
+        if (lateral || steeredWalk || (motion.walking && CanWalk(base, fighter)))
+            end = start;
+        motion.walking = lateral;
+        tekken_force::ClampArenaDepth(end.x, end.z, g_camera.centerX, g_camera.centerZ,
+            g_camera.rightX, g_camera.rightZ);
+        float travel = 1.0f;
+        for (const auto& other : g_bodyMotion)
+            if (other.fighter != fighter && SolidBody(base, other.fighter))
+                travel = std::min(travel, tekken_force::BodyTravelFraction(start, end, {other.x, other.z}));
+        const FloorPoint accepted{std::lerp(start.x, end.x, travel), std::lerp(start.z, end.z, travel)};
+        if (accepted.x != proposed.x || accepted.z != proposed.z)
+            SetFloorPosition(ctx, base, fighter, accepted.x, accepted.z);
+        motion.x = accepted.x;
+        motion.z = accepted.z;
+    }
+}
+
 void ActivateEnemy(PPCContext& ctx, uint8_t* base, uint32_t enemy, uint32_t player, float along, float depth)
 {
     const uint32_t contact = GRead32(base, player + kContact);
@@ -594,13 +695,13 @@ void MoveOnFloor(PPCContext& ctx, uint8_t* base, uint32_t fighter, float alongSt
     const float across = FloorDepth(offsetX, offsetZ) + depthStep;
     const float nextX = g_camera.centerX + along * rightX - across * rightZ;
     const float nextZ = g_camera.centerZ + along * rightZ + across * rightX;
-    if (std::abs(nextX - x) > 0.001f || std::abs(nextZ - z) > 0.001f)
-        SetFloorPosition(ctx, base, fighter, nextX, nextZ);
+    MoveWithBodyContact(ctx, base, fighter, {nextX, nextZ});
 }
 
 void ReconcileWalk(PPCContext& ctx, uint8_t* base, uint32_t fighter, FloorMotion& motion)
 {
-    const bool walking = NativeWalk(base, fighter);
+    const bool walking = NativeWalk(base, fighter) ||
+        (fighter == PlayerFighter(base) && NativeLateralMove(base, fighter));
     const bool walkEnded = motion.walking && CanWalk(base, fighter);
     if (motion.fighter == fighter && motion.life == GRead32(base,fighter+kLife) && (walking || walkEnded))
         SetFloorPosition(ctx, base, fighter, motion.x, motion.z);
@@ -614,33 +715,44 @@ bool NativeDuelLocomotion()
 
 void MovePlayer(PPCContext& ctx, uint8_t* base, uint32_t fighter)
 {
-    // A locked duel uses the native forward/backward walk, dash and root motion.
-    // Only free movement and the explicit double-tap depth gesture need steering.
-    if (NativeDuelLocomotion()) return;
+    if (NativeDuelLocomotion())
+    {
+        g_stepDirection = 0;
+        return;
+    }
     const float before=ReadFloat(base,fighter)*g_camera.rightX+ReadFloat(base,fighter+8)*g_camera.rightZ;
     int horizontal, depth;
     TekkenForceReadMoveAxes(horizontal, depth);
     if (!g_controls.freeMovement) depth=g_controls.depthMotion;
-    const float step = horizontal && depth ? kWalkStep * 0.70710678f : kWalkStep;
     if (g_controls.freeMovement || !g_target)
     {
+        g_stepDirection = 0;
+        const float step = horizontal && depth ? kWalkStep * 0.70710678f : kWalkStep;
         MoveOnFloor(ctx,base,fighter,horizontal*step,depth*step);
         g_camera.horizontal.ObserveWalk(before,
             ReadFloat(base,fighter)*g_camera.rightX+ReadFloat(base,fighter+8)*g_camera.rightZ);
         return;
     }
-    const float tx=ReadFloat(base,g_target), tz=ReadFloat(base,g_target+8);
-    const float dx=tx-ReadFloat(base,fighter), dz=tz-ReadFloat(base,fighter+8);
-    const float radius=std::hypot(dx,dz);
-    if (radius<1.0f || (!horizontal && !depth)) return;
-    const float along=dx*g_camera.rightX+dz*g_camera.rightZ;
-    const float side=std::abs(along)<50.0f ? (GRead32(base,fighter+1024)?-1.0f:1.0f) :
-        (along>0.0f?1.0f:-1.0f);
-    const float nextRadius=std::max(50.0f,radius-horizontal*side*step);
-    const float angle=-depth*side*step/radius;
-    const float px=-dx/radius*nextRadius, pz=-dz/radius*nextRadius;
-    SetFloorPosition(ctx,base,fighter,tx+px*std::cos(angle)-pz*std::sin(angle),
-        tz+px*std::sin(angle)+pz*std::cos(angle));
+    const auto start = FloorPosition(base, fighter);
+    const auto target = FloorPosition(base, g_target);
+    const float dx = target.x - start.x, dz = target.z - start.z;
+    const float distance = std::hypot(dx, dz);
+    if (distance < 1.0f) return;
+    const float side = GRead32(base, fighter + 1024) ? -1.0f : 1.0f;
+    // Hold the direction chosen when the sidestep starts. An enemy crossing
+    // screen centre during the hold must not reverse a held depth input.
+    if (g_stepDirection != depth || g_stepTarget != g_target)
+    {
+        const float stageAlong = dx * g_camera.rightX + dz * g_camera.rightZ;
+        const float orientation = std::abs(stageAlong) < 50.0f ? side : std::copysign(1.0f, stageAlong);
+        g_stepAxis = {-dz * orientation / distance, dx * orientation / distance};
+        g_stepDirection = depth;
+        g_stepTarget = g_target;
+    }
+    const float vx = horizontal * side * dx / distance + depth * g_stepAxis.x;
+    const float vz = horizontal * side * dz / distance + depth * g_stepAxis.z;
+    const float step = kWalkStep / std::max(1.0f, std::hypot(vx, vz));
+    MoveWithBodyContact(ctx, base, fighter, {start.x + step * vx, start.z + step * vz});
     g_camera.horizontal.ObserveWalk(before,
         ReadFloat(base,fighter)*g_camera.rightX+ReadFloat(base,fighter+8)*g_camera.rightZ);
 }
@@ -665,8 +777,8 @@ void SeparateEnemies(PPCContext& ctx, uint8_t* base, const std::array<uint32_t, 
             if (!movable) continue;
             const float step = std::min(24.0f,(spacing-distance)/float(movable));
             dx *= step/distance; dz *= step/distance;
-            if (moveA) SetFloorPosition(ctx,base,a,ReadFloat(base,a)-dx,ReadFloat(base,a+8)-dz);
-            if (moveB) SetFloorPosition(ctx,base,b,ReadFloat(base,b)+dx,ReadFloat(base,b+8)+dz);
+            if (moveA) MoveWithBodyContact(ctx,base,a,{ReadFloat(base,a)-dx,ReadFloat(base,a+8)-dz});
+            if (moveB) MoveWithBodyContact(ctx,base,b,{ReadFloat(base,b)+dx,ReadFloat(base,b+8)+dz});
         }
 }
 
@@ -976,21 +1088,20 @@ PPC_FUNC(sub_824D0D78)
     __imp__sub_824D0D78(ctx, base);
 }
 
-// The duel's body separation also pushes fighters at attack range. In the
-// Force encounter let it resolve actual close contact without moving the
-// player simply because the enemy approached.
 PPC_FUNC(sub_822D4B68)
 {
     const uint32_t first = ctx.r3.u32;
     const uint32_t second = ctx.r4.u32;
-    if (EncounterPair(base, first, second))
-    {
-        if (g_fullRoster && (Defeated(base, first) || Defeated(base, second))) return;
-        const float x = ReadFloat(base, first) - ReadFloat(base, second);
-        const float z = ReadFloat(base, first + 8) - ReadFloat(base, second + 8);
-        if (x * x + z * z > kBodyContactDistance * kBodyContactDistance) return;
-    }
+    // The Force sweep handles both player/enemy and enemy/enemy contact.
+    if (EncounterPair(base, first, second) ||
+        (InPractice(base) && g_camera.ready && IsEnemy(base, first) && IsEnemy(base, second))) return;
     __imp__sub_822D4B68(ctx, base);
+}
+
+PPC_FUNC(sub_822D4E10)
+{
+    __imp__sub_822D4E10(ctx, base);
+    if (InPractice(base) && g_camera.ready) ResolveNativeBodyMotion(ctx, base);
 }
 
 // Both guest collision paths queue hit reactions and damage for this pair.
@@ -1100,16 +1211,21 @@ PPC_FUNC(sub_822E2060)
 PPC_FUNC(sub_822E2590)
 {
     __imp__sub_822E2590(ctx, base);
-    if (!ExtraActive(base)) return;
-    PPCContext advance = ctx;
-    advance.r3.u32 = kPracticeExtra;
-    advance.r4.u32 = PlayerFighter(base);
-    advance.r5.u32 = 0;
-    __imp__sub_82318FC0(advance, base);
+    if (ExtraActive(base))
+    {
+        PPCContext advance = ctx;
+        advance.r3.u32 = kPracticeExtra;
+        advance.r4.u32 = PlayerFighter(base);
+        advance.r5.u32 = 0;
+        __imp__sub_82318FC0(advance, base);
+    }
 }
 
 PPC_FUNC(sub_822CD798)
 {
+    // Native animation/root processing also runs between battle ticks.
+    // Resolve any resulting displacement before publishing the model.
+    if (InPractice(base) && g_camera.ready) ResolveNativeBodyMotion(ctx, base);
     __imp__sub_822CD798(ctx, base);
     if (!ExtraActive(base)) return;
     const uint32_t models = GRead32(base, kFighterModels);
@@ -1194,6 +1310,7 @@ PPC_FUNC(sub_82320AC8)
         const auto enemies = Enemies(base);
         if (player && enemies[0])
         {
+            ResolveNativeBodyMotion(ctx, base);
             if (!NativeDuelLocomotion()) ReconcileWalk(ctx, base, player, g_motion[0]);
             ConstrainArenaDepth(ctx,base,player);
             if (g_spawnPartner && enemies[1])
@@ -1218,8 +1335,10 @@ PPC_FUNC(sub_82320AC8)
                     ActivateEnemy(ctx, base, enemies[3], player, originAlong + offscreen + 1200.0f, originDepth - 2400.0f);
                 }
                 g_spawnPartner = false;
+                SaveBodyPositions(base);
             }
             UpdateTarget(base, player);
+            if (!g_controls.depthMotion || g_controls.freeMovement) g_stepDirection = 0;
             if (!Defeated(base,player) && CanWalk(base,player)) MovePlayer(ctx,base,player);
             TekkenForceTraceCamera("follow-input",base,RenderCamera(base),player,g_cameraTick,
                 g_camera.eye.data(),g_camera.target.data());
@@ -1237,7 +1356,6 @@ PPC_FUNC(sub_82320AC8)
                 }
                 ReconcileWalk(ctx, base, enemy, g_motion[i + 1]);
                 ConstrainArenaDepth(ctx,base,enemy);
-                MoveOnFloor(ctx, base, enemy, 0.0f, 0.0f);
                 UpdateEnemy(ctx, base, enemy, player, g_enemies[i], i);
                 g_entryMotion[i] = {};
                 if (g_enemies[i].entering)
@@ -1293,6 +1411,12 @@ PPC_FUNC(sub_822CDA88)
             SetFloorPosition(ctx, base, fighter, g_entryMotion[i - 1].x, g_entryMotion[i - 1].z);
         }
         ConstrainArenaDepth(ctx,base,fighter);
+    }
+    ResolveNativeBodyMotion(ctx, base);
+    for (unsigned i = 0; i < g_motion.size(); ++i)
+    {
+        const uint32_t fighter = actors[i];
+        if (!fighter) continue;
         g_motion[i].fighter = fighter;
         g_motion[i].x = ReadFloat(base, fighter);
         g_motion[i].z = ReadFloat(base, fighter + 8);
@@ -1835,7 +1959,7 @@ PPC_FUNC(sub_82314EA0)
             // Preserve the native backward/forward entry and loop transitions.
             // Forcing neutral+1 here restarts a forward pose every tick while
             // host translation moves backwards, producing the reported slide.
-            if (NativeDuelLocomotion() &&
+            if (NativeDuelLocomotion() && !NativeLateralName(text) &&
                 (std::strstr(text,"sWALK") || std::strstr(text,"sSTEP"))) return;
             if (std::strstr(text,"sYOKE") || std::strstr(text,"sJUMP") ||
                 std::strstr(text,"sSTEP") || std::strstr(text,"sWALK") ||

@@ -62,5 +62,12 @@ int main()
     camera.ObserveCombat(2000,4);
     camera.ObserveCombat(2000,5); // Persistent committed displacement must stay visible.
     assert(camera.reference==2000);
+    // An endpoint beyond the other fighter must not tunnel through its body.
+    using tekken_force::BodyTravelFraction;
+    assert(std::abs(BodyTravelFraction({-900, 0}, {900, 0}, {0, 0}) - 480.0f / 1800.0f) < .0001f);
+    assert(BodyTravelFraction({-420, 0}, {-390, 0}, {0, 0}) == 0);
+    assert(BodyTravelFraction({-419, 0}, {-450, 0}, {0, 0}) == 1);
+    assert(BodyTravelFraction({-420, 0}, {-420, 24}, {0, 0}) == 1);
+    assert(BodyTravelFraction({-900, 421}, {900, 421}, {0, 0}) == 1);
     std::puts("PASS dead zone, bounded camera acceleration, idle reference, once-per-tick follow and floor band");
 }
